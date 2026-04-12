@@ -817,23 +817,9 @@ const App=()=>{
     return pool.filter(s=>s.symbol.toUpperCase().includes(q)||s.name?.toUpperCase().includes(q)).slice(0,120);
   },[query,searchCat]);
 
-  // MTF VP bias score: 0–100 (50=neutral), weighted 1W·40%+1D·30%+4H·20%+1H·10%
-  const mtfVPScore=useMemo(()=>{
-    if(!mtfVP||!price)return null;
-    const W={'1w':0.40,'1d':0.30,'4h':0.20,'1h':0.10};
-    let s=0;
-    for(const[t,w]of Object.entries(W)){
-      const v=mtfVP[t];if(!v)continue;
-      s+=w*(price>v.poc?1:price<v.poc?-1:0);
-    }
-    return Math.round((s+1)*50); // –1..1 → 0..100
-  },[mtfVP,price]);
-
-  // Combined bias: SMC/EMA 70% + MTF VP 30%
-  const combinedBias=setup?Math.round((setup.bull_pct??50)*0.7+(mtfVPScore??50)*0.3):null;
-
   const selectSym=s=>{setShowSearch(false);setQuery('');setSearchCat('');setSymbol(s);};
   const changeTf=t=>{setTf(t);load(symbol,t);};
+  // price must be declared before any useMemo that references it
   const price=livePrice??candles?.[candles.length-1]?.close??null;
   const dec=smartDec(price??0);
   const chg=price&&prevClose?price-prevClose:null;
@@ -843,6 +829,21 @@ const App=()=>{
   const macroLbl=overall.label||'';
   const macroC=macroLbl==='Risk-ON'?'#26a69a':macroLbl==='Risk-OFF'?'#ef5350':'#787b86';
   const hiCount=(nd?.high_impact||[]).length;
+
+  // MTF VP bias score: 0–100 (50=neutral), weighted 1W·40%+1D·30%+4H·20%+1H·10%
+  const mtfVPScore=useMemo(()=>{
+    if(!mtfVP||!price)return null;
+    const wts={'1w':0.40,'1d':0.30,'4h':0.20,'1h':0.10};
+    let s=0;
+    for(const[t,w]of Object.entries(wts)){
+      const v=mtfVP[t];if(!v)continue;
+      s+=w*(price>v.poc?1:price<v.poc?-1:0);
+    }
+    return Math.round((s+1)*50); // –1..1 → 0..100
+  },[mtfVP,price]);
+
+  // Combined bias: SMC/EMA 70% + MTF VP 30%
+  const combinedBias=setup?Math.round((setup.bull_pct??50)*0.7+(mtfVPScore??50)*0.3):null;
 
   return(
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'#131722'}}>
