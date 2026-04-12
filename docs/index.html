@@ -48,8 +48,15 @@ body{background:#131722;color:#d1d4dc;font-family:'Inter',sans-serif;overflow:hi
 </style>
 </head>
 <body>
-<div id="root"></div>
-<script type="text/babel">
+<div id="root"><div style="color:#787b86;font-family:monospace;padding:40px;font-size:12px">Loading SMC Pro…</div></div>
+<script>
+window.onerror=function(msg,src,line,col,err){
+  var r=document.getElementById('root');
+  if(r)r.innerHTML='<div style="color:#ef5350;background:#131722;padding:24px;font-family:monospace;font-size:12px;white-space:pre-wrap">JS Error: '+msg+'\nLine: '+line+'\n'+(err&&err.stack?err.stack:'')+'</div>';
+  return false;
+};
+</script>
+<script type="text/babel" data-presets="react,env" data-plugins="transform-optional-chaining,transform-nullish-coalescing-operator,transform-class-properties">
 const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
