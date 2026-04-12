@@ -188,7 +188,7 @@ function calcVolumeProfile(candles,numBuckets=100){
     if(vols[i]>avg*2.0)hvn.push(p);
     else if(vols[i]>0&&vols[i]<avg*0.3)lvn.push(p);
   }
-  return{poc,vah,val,hvn,lvn,bSz};
+  return{poc,vah,val,hvn,lvn,bSz,vols,minP,pocIdx,numBuckets};
 }
 function vpPOCSignal(candles,poc){
   if(!poc||candles.length<10)return null;
@@ -310,7 +310,7 @@ function generateSetup(candles,price){
     confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
     future_candles:futureCandlesSim(candles,signal,lATR,12), // deterministic
     // Volume Profile
-    vp:vp?{poc:vp.poc,vah:vp.vah,val:vp.val,hvn:(vp.hvn||[]).slice(0,5),lvn:(vp.lvn||[]).slice(0,5)}:null,
+    vp:vp?{poc:vp.poc,vah:vp.vah,val:vp.val,hvn:(vp.hvn||[]).slice(0,5),lvn:(vp.lvn||[]).slice(0,5),vols:vp.vols,minP:vp.minP,bSz:vp.bSz,pocIdx:vp.pocIdx}:null,
     poc_signal:pocSig,
     hvn_conf:hvnConf,
     lvn_conf:lvnConf,
@@ -592,7 +592,7 @@ const App=()=>{
   const[futureCount,setFutureCount]=useState('');
   const[mtfVP,setMtfVP]=useState(null);
 
-  const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]);
+  const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]),vpCanvasRef=useRef(null);
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
 
   // Chart init
@@ -664,6 +664,57 @@ const App=()=>{
       hvn.slice(0,3).forEach(p=>vpLinesRef.current.push(
         cSeries.current.createPriceLine({price:p,color:'#FF980055',lineWidth:1,lineStyle:3,axisLabelVisible:false,title:'HVN'})
       ));
+    }
+    // ── VP Histogram on canvas ─────────────────────────────────────────────────
+    const vpCanvas=vpCanvasRef.current;
+    if(vpCanvas&&cSeries.current){
+      const dpr=window.devicePixelRatio||1;
+      const W=vpCanvas.offsetWidth,H=vpCanvas.offsetHeight;
+      vpCanvas.width=W*dpr;vpCanvas.height=H*dpr;
+      const ctx=vpCanvas.getContext('2d');
+      ctx.scale(dpr,dpr);
+      ctx.clearRect(0,0,W,H);
+      const v=setup?.vp;
+      if(v?.vols&&v.vols.length){
+        const{vols,minP,bSz,pocIdx,vah,val,poc}=v;
+        const maxVol=Math.max(...vols);
+        if(maxVol>0){
+          const avg=vols.reduce((s,x)=>s+x,0)/vols.length;
+          const barMaxW=Math.round(W*0.13);
+          for(let i=0;i<vols.length;i++){
+            if(!vols[i])continue;
+            const bLo=minP+i*bSz,bHi=bLo+bSz;
+            const y1=cSeries.current.priceToCoordinate(bHi);
+            const y2=cSeries.current.priceToCoordinate(bLo);
+            if(y1==null||y2==null||y2<0||y1>H)continue;
+            const bH=Math.max(1,Math.abs(y2-y1));
+            const bW=Math.max(1,Math.round((vols[i]/maxVol)*barMaxW));
+            const isPOC=i===pocIdx;
+            const isHVN=vols[i]>avg*2.0;
+            const inVA=bLo>=val&&bHi<=vah;
+            ctx.globalAlpha=isPOC?0.90:isHVN?0.75:inVA?0.55:0.38;
+            ctx.fillStyle=isPOC?'#FFD600':isHVN?'#FFD600':'#2962ff';
+            ctx.fillRect(W-bW,Math.min(y1,y2),bW,bH);
+          }
+          ctx.globalAlpha=1;
+          // POC horizontal line + label
+          const pocY=cSeries.current.priceToCoordinate(poc);
+          if(pocY!=null&&pocY>=0&&pocY<=H){
+            ctx.fillStyle='rgba(255,150,0,0.9)';
+            ctx.fillRect(W-barMaxW-2,pocY-1,barMaxW+2,2);
+            ctx.font=`bold 9px Inter,sans-serif`;
+            ctx.fillStyle='#FF9800';
+            ctx.textAlign='right';
+            ctx.fillText('POC',W-barMaxW-5,pocY+3.5);
+          }
+          // VAH / VAL labels
+          const vahY=cSeries.current.priceToCoordinate(vah);
+          const valY=cSeries.current.priceToCoordinate(val);
+          ctx.font='8px Inter,sans-serif';
+          if(vahY!=null&&vahY>=0&&vahY<=H){ctx.fillStyle='#26a69a';ctx.textAlign='right';ctx.fillText('VAH',W-barMaxW-5,vahY-2);}
+          if(valY!=null&&valY>=0&&valY<=H){ctx.fillStyle='#ef5350';ctx.textAlign='right';ctx.fillText('VAL',W-barMaxW-5,valY+9);}
+        }
+      }
     }
   },[candles,setup,nd,futureCount]);
 
@@ -830,6 +881,7 @@ const App=()=>{
             <span style={{color:'#787b86',fontSize:12}}>Loading {symbol} {tf}…</span>
           </div>}
           <div ref={chartRef} style={{width:'100%',height:'100%'}}/>
+          <canvas ref={vpCanvasRef} style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none',zIndex:2}}/>
         </div>
 
         {/* PANEL */}
