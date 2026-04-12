@@ -124,12 +124,23 @@ function candleType(c){
   if(uw>body*2&&lw<body) return 'Shooting Star / Bearish';
   return c.close>c.open?'Bullish Candle':'Bearish Candle';
 }
+// Deterministic pseudo-random: same seed → same sequence every time
+function seededRand(seed,i){
+  const x=Math.sin(seed*9301+(i+1)*49297+233280)*10000;
+  return x-Math.floor(x); // 0..1
+}
+// Future candles: direction locked to signal, deterministic seed = no random flips
 function futureCandlesSim(candles,signal,atr,count){
-  let p=candles[candles.length-1].close;
+  const last=candles[candles.length-1];
+  // Seed from rounded price so candles only change when price meaningfully moves
+  const seed=Math.round(last.close/atr);
+  const dir=signal==='LONG'?1:-1;
+  let p=last.close;
   return Array.from({length:count},(_,i)=>{
-    const dir=signal==='LONG'?1:-1;
-    const move=dir*atr*0.38*(1+Math.sin(i)*0.2);
-    const o=p,c=p+move,wick=atr*0.15;
+    const r=seededRand(seed,i);
+    // Consistent move size: trend momentum decays slightly over projection
+    const move=dir*atr*(0.30+r*0.20)*(1-i*0.02);
+    const o=p,c=p+move,wick=atr*(0.10+seededRand(seed+1,i)*0.10);
     p=c;
     return{open:o,high:Math.max(o,c)+wick,low:Math.min(o,c)-wick,close:c};
   });
@@ -143,24 +154,53 @@ function generateSetup(candles,price){
   const lRSI=rsi[rsi.length-1]||50,lATR=atrArr[atrArr.length-1]||price*0.01;
   const sw=detectSwings(H,L);
   const fvg=detectFVG(candles),bos=detectBOS(candles,sw);
-  const bullBias=price>le9&&le9>le21&&le21>le50;
-  const bearBias=price<le9&&le9<le21&&le21<le50;
+
+  // ── EMA alignment (primary — never overridden by RSI alone) ──────────────
+  const bullBias=price>le9&&le9>le21&&le21>le50;  // full bull stack
+  const bearBias=price<le9&&le9<le21&&le21<le50;  // full bear stack
   const htf=bullBias?'Bullish':bearBias?'Bearish':'Neutral';
-  const bullPct=(price>le9?25:0)+(price>le21?20:0)+(price>le50?15:0)+(lRSI>50?20:0)+(bos.filter(b=>b.type==='bull').length>0?20:0);
-  let signal=bearBias&&lRSI>35?'SHORT':'LONG';
-  if(bullBias&&lRSI<72) signal='LONG';
+
+  // ── Bull/bear score (for bar display) ─────────────────────────────────────
+  const bullPct=
+    (price>le9?20:0)+(price>le21?20:0)+(price>le50?15:0)+
+    (lRSI>50?15:0)+(bos.filter(b=>b.type==='bull').length>0?15:0)+
+    (fvg.filter(f=>f.type==='bull').length>0?15:0);
+
+  // ── Signal: HTF trend is the MASTER, RSI only fine-tunes at extremes ──────
+  // In clear uptrend  → LONG unless RSI extremely overbought (>80)
+  // In clear downtrend → SHORT unless RSI extremely oversold (<20) AND bullish BOS
+  // Neutral           → follow most recent BOS, else score
+  let signal;
+  if(bullBias){
+    signal = lRSI<80 ? 'LONG' : 'SHORT';
+  } else if(bearBias){
+    const hasBullBOS=bos.length>0&&bos[bos.length-1].type==='bull';
+    signal = (lRSI<20&&hasBullBOS) ? 'LONG' : 'SHORT';
+  } else {
+    // Neutral zone: last BOS wins, tie-break by score
+    const lastBOS=bos[bos.length-1];
+    if(lastBOS?.type==='bull'&&lRSI<65) signal='LONG';
+    else if(lastBOS?.type==='bear'&&lRSI>35) signal='SHORT';
+    else signal=bullPct>=50?'LONG':'SHORT';
+  }
+
   const isL=signal==='LONG';
   const sl=isL?price-lATR*1.5:price+lATR*1.5;
   const tp1=isL?price+lATR*2:price-lATR*2;
   const tp2=isL?price+lATR*4:price-lATR*4;
   const d=Math.abs(price-sl)||1;
   const rh=H.slice(-30).sort((a,b)=>b-a),rl=L.slice(-30).sort((a,b)=>a-b);
+
+  // ── Wyckoff phase ──────────────────────────────────────────────────────────
   let phase='Accumulation';
   if(bullBias&&lRSI>55) phase='Markup';
   else if(bearBias&&lRSI<45) phase='Markdown';
-  else if(price>le50&&lRSI>60) phase='Distribution';
+  else if(price>le50&&lRSI>65) phase='Distribution';
+
   const lc=candles[candles.length-1];
-  const TF_DEF={'1m':60,'5m':24,'15m':12,'1h':8,'4h':6,'1d':1,'1w':1};
+  // Next candle type from actual last candle, direction always matches signal
+  const next_dir=isL?'Bullish':'Bearish';
+
   return{
     signal,htf_bias:htf,phase,bull_pct:bullPct,bear_pct:100-bullPct,
     rsi:lRSI.toFixed(1),atr:lATR.toFixed(price>100?2:6),
@@ -169,15 +209,16 @@ function generateSetup(candles,price){
     stop_loss:sl,take_profit_1:tp1,take_profit_2:tp2,
     rr1:`1:${(Math.abs(tp1-price)/d).toFixed(1)}`,
     rr2:`1:${(Math.abs(tp2-price)/d).toFixed(1)}`,
-    leverage:lRSI<30||lRSI>70?3:lATR/price<0.01?10:5,
+    // Leverage: lower in high-volatility or extreme RSI
+    leverage:lATR/price>0.025?2:lATR/price>0.015?3:lRSI<25||lRSI>75?3:lATR/price<0.008?10:5,
     fvg,bos,
     bsl:[rh[0],rh[1],rh[2]].filter(Boolean),
     ssl:[rl[0],rl[1],rl[2]].filter(Boolean),
-    next_dir:C.slice(-3)[2]>C.slice(-3)[0]?'Bullish':'Bearish',
+    next_dir,                              // always matches signal
     next_type:candleType(lc),
     next_size:lATR/price>0.02?'Large':lATR/price>0.008?'Medium':'Small',
     confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
-    future_candles:futureCandlesSim(candles,signal,lATR,12),
+    future_candles:futureCandlesSim(candles,signal,lATR,12), // deterministic
   };
 }
 
