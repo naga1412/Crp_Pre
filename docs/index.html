@@ -223,50 +223,93 @@ async function fetchCandles(symbol,tf,limit=600){
   return isCrypto(symbol)?fetchBinance(symbol,tf,limit):fetchYF(symbol,tf,limit);
 }
 
-// ─── NEWS ─────────────────────────────────────────────────────────────────────
+// ─── NEWS (direct RSS via CORS proxy + DOMParser — no 3rd party service) ──────
 const RSS_FEEDS=[
   {u:'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US',s:'Yahoo Finance'},
   {u:'https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US',s:'Yahoo Crypto'},
   {u:'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114',s:'CNBC Markets'},
+  {u:'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664',s:'CNBC World Economy'},
   {u:'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362',s:'CNBC Crypto'},
   {u:'https://www.coindesk.com/arc/outboundfeeds/rss/',s:'CoinDesk'},
-  {u:'https://news.google.com/rss/search?q=federal+reserve+interest+rate&hl=en-US&gl=US&ceid=US:en',s:'Google News (Fed)'},
-  {u:'https://news.google.com/rss/search?q=war+conflict+geopolitical+market&hl=en-US&gl=US&ceid=US:en',s:'Google News (Geo)'},
-  {u:'https://news.google.com/rss/search?q=bitcoin+crypto+market&hl=en-US&gl=US&ceid=US:en',s:'Google News (Crypto)'},
+  {u:'https://news.google.com/rss/search?q=federal+reserve+interest+rate+fomc&hl=en-US&gl=US&ceid=US:en',s:'Google News (Fed)'},
+  {u:'https://news.google.com/rss/search?q=war+conflict+geopolitical+sanctions&hl=en-US&gl=US&ceid=US:en',s:'Google News (Geo)'},
+  {u:'https://news.google.com/rss/search?q=bitcoin+ethereum+crypto+market&hl=en-US&gl=US&ceid=US:en',s:'Google News (Crypto)'},
+  {u:'https://news.google.com/rss/search?q=stock+market+economy+recession+GDP&hl=en-US&gl=US&ceid=US:en',s:'Google News (Markets)'},
+  {u:'https://news.google.com/rss/search?q=inflation+cpi+interest+rate+jobs&hl=en-US&gl=US&ceid=US:en',s:'Google News (Macro)'},
 ];
-const KWB=['rate cut','fed cut','pivot','dovish','stimulus','rally','surge','upgrade','ceasefire','recovery','beat','approves bitcoin','trade deal'];
-const KWR=['rate hike','hawkish','recession','war','attack','invasion','airstrike','crash','plunge','ban','default','stagflation','crackdown','layoffs','sanctions'];
-const CATS={'FED / RATES':['fed','fomc','powell','rate cut','rate hike','interest rate','cpi','inflation','basis points','treasury yield'],'WAR / GEO':['war','attack','invasion','airstrike','missile','ukraine','russia','israel','gaza','iran','nato','nuclear','geopolit'],'CRYPTO REG':['sec','cftc','bitcoin etf','crypto regulation','binance','coinbase charged','cbdc'],'CRYPTO MARKET':['bitcoin','btc','ethereum','eth','solana','sol','crypto','defi','halving'],'EARNINGS':['earnings','revenue','profit','eps','quarterly','beats','misses','guidance'],'MACRO / ECONOMY':['gdp','unemployment','jobs report','nonfarm','pmi','recession','imf','world bank'],'STOCK MARKET':["s&p 500","nasdaq","dow jones","wall street","ipo","merger"]};
+// Multiple CORS proxies tried in order until one works
+const CORS_PROXIES=[
+  u=>`https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+  u=>`https://corsproxy.io/?${encodeURIComponent(u)}`,
+  u=>`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
+];
+async function fetchRSS(feed){
+  for(const proxy of CORS_PROXIES){
+    try{
+      const ctrl=new AbortController();
+      const tid=setTimeout(()=>ctrl.abort(),8000);
+      const r=await fetch(proxy(feed.u),{signal:ctrl.signal});
+      clearTimeout(tid);
+      if(!r.ok) continue;
+      const text=await r.text();
+      if(!text||text.trim().startsWith('{')&&!text.includes('<item')) continue; // got JSON error response
+      const doc=new DOMParser().parseFromString(text,'text/xml');
+      const items=[...doc.querySelectorAll('item')];
+      if(!items.length) continue;
+      return items.map(el=>{
+        // link: sometimes inside CDATA or as text
+        const link=el.querySelector('link')?.textContent?.trim()||
+                   el.getElementsByTagName('link')?.[0]?.nextSibling?.nodeValue?.trim()||'';
+        return{
+          title:(el.querySelector('title')?.textContent||'').trim(),
+          link, pubDate:(el.querySelector('pubDate')?.textContent||'').trim(),
+        };
+      }).filter(i=>i.title.length>5);
+    }catch(_){continue;}
+  }
+  return [];
+}
+const KWB=['rate cut','fed cut','pivot','dovish','stimulus','rally','surge','upgrade','ceasefire','recovery','beats','approves bitcoin','trade deal','soft landing'];
+const KWR=['rate hike','hawkish','recession','war','attack','invasion','airstrike','crash','plunge','ban','default','stagflation','crackdown','layoffs','sanctions','nuclear','collapse','tariff'];
+const CATS={'FED / RATES':['fed','fomc','powell','rate cut','rate hike','interest rate','cpi','inflation','basis points','treasury yield','monetary policy'],'WAR / GEO':['war','attack','invasion','airstrike','missile','ukraine','russia','israel','gaza','iran','nato','nuclear','geopolit','sanction','troops'],'CRYPTO REG':['sec','cftc','bitcoin etf','crypto regulation','binance','coinbase charged','cbdc','crypto law','crypto ban'],'CRYPTO MARKET':['bitcoin','btc','ethereum','eth','solana','sol','crypto','defi','halving','altcoin','nft'],'EARNINGS':['earnings','revenue','profit','eps','quarterly','beats','misses','guidance','results'],'MACRO / ECONOMY':['gdp','unemployment','jobs report','nonfarm','pmi','recession','imf','world bank','retail sales','deficit'],'STOCK MARKET':["s&p 500","nasdaq","dow jones","wall street","ipo","merger","acquisition","stock market"]};
 const CAT_COLORS={'FED / RATES':'#ff9800','WAR / GEO':'#f44336','CRYPTO REG':'#2962ff','EARNINGS':'#26a69a','MACRO / ECONOMY':'#ab47bc','CRYPTO MARKET':'#00bcd4','STOCK MARKET':'#8bc34a','MARKET NEWS':'#787b86'};
 function scoreItem(title){
   const t=title.toLowerCase();
   const bull=KWB.filter(k=>t.includes(k)).length,bear=KWR.filter(k=>t.includes(k)).length;
-  const hi=['war','invasion','attack','rate cut','rate hike','crash','recession','ceasefire','default'].some(k=>t.includes(k))?2:1;
+  const hi=['war','invasion','attack','rate cut','rate hike','crash','recession','ceasefire','default','nuclear'].some(k=>t.includes(k))?2:1;
   if(bull>bear){const p=Math.min(1+bull*0.7*hi,5);return{sentiment:'bullish',impact_pct:+p.toFixed(1),impact_label:p>=3?'HIGH':p>=1.5?'MEDIUM':'LOW'};}
   if(bear>bull){const p=Math.min(1+bear*0.7*hi,5);return{sentiment:'bearish',impact_pct:+p.toFixed(1),impact_label:p>=3?'HIGH':p>=1.5?'MEDIUM':'LOW'};}
   return{sentiment:'neutral',impact_pct:0.3,impact_label:'LOW'};
 }
 function detectCat(t){const tl=t.toLowerCase();for(const[c,ks]of Object.entries(CATS))if(ks.some(k=>tl.includes(k)))return c;return'MARKET NEWS';}
-async function fetchNews(symbol){
+function parseDate(s){try{return new Date(s).getTime()||Date.now();}catch{return Date.now();}}
+// Fetch fresh items from all RSS feeds in parallel
+async function fetchFreshNews(){
   const all=[];
   await Promise.allSettled(RSS_FEEDS.map(async feed=>{
-    try{
-      const url=`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.u)}&count=15&api_key=`;
-      const r=await fetch(url);const d=await r.json();
-      if(d.items){for(const it of d.items){const sc=scoreItem(it.title);all.push({headline:it.title,url:it.link,source:feed.s,timestamp:it.pubDate||new Date().toISOString(),...sc,category:detectCat(it.title)});}}
-    }catch(_){}
+    const items=await fetchRSS(feed);
+    for(const it of items){
+      if(!it.title) continue;
+      const sc=scoreItem(it.title);
+      all.push({headline:it.title,url:it.link,source:feed.s,timestamp:it.pubDate?new Date(it.pubDate).toISOString():new Date().toISOString(),...sc,category:detectCat(it.title),fetchedAt:Date.now()});
+    }
   }));
+  return all;
+}
+// Build the nd response object from a flat array of news items (max 200)
+function buildNd(items,symbol){
   const seen=new Set(),deduped=[];
-  for(const n of all.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp))){
-    const k=n.headline.slice(0,60).toLowerCase();if(!seen.has(k)){seen.add(k);deduped.push(n);}
+  for(const n of items.sort((a,b)=>parseDate(b.timestamp)-parseDate(a.timestamp))){
+    const k=n.headline.slice(0,65).toLowerCase();if(!seen.has(k)){seen.add(k);deduped.push(n);}
   }
+  const news=deduped.slice(0,200);
   const coin=isCrypto(symbol)?symbol.split('/')[0].toLowerCase():symbol.split('=')[0].replace('^','').toLowerCase();
-  const symNews=deduped.filter(n=>n.headline.toLowerCase().includes(coin));
-  const high=deduped.filter(n=>n.impact_label==='HIGH');
-  const tb=deduped.filter(n=>n.sentiment==='bullish').length,tr=deduped.filter(n=>n.sentiment==='bearish').length;
+  const symNews=news.filter(n=>n.headline.toLowerCase().includes(coin));
+  const high=news.filter(n=>n.impact_label==='HIGH');
+  const tb=news.filter(n=>n.sentiment==='bullish').length,tr=news.filter(n=>n.sentiment==='bearish').length;
   const cats={};
-  for(const n of deduped){if(!cats[n.category])cats[n.category]={count:0,bullish:0,bearish:0,neutral:0};cats[n.category].count++;cats[n.category][n.sentiment]++;}
-  return{news:deduped.slice(0,40),symbol_news:symNews.slice(0,8),high_impact:high.slice(0,5),category_summary:cats,overall_sentiment:{bullish:tb,bearish:tr,neutral:deduped.length-tb-tr,label:tb>tr?'Risk-ON':tr>tb?'Risk-OFF':'Neutral'},fetched_at:new Date().toISOString()};
+  for(const n of news){if(!cats[n.category])cats[n.category]={count:0,bullish:0,bearish:0,neutral:0};cats[n.category].count++;cats[n.category][n.sentiment]++;}
+  return{news,symbol_news:symNews.slice(0,10),high_impact:high.slice(0,8),category_summary:cats,overall_sentiment:{bullish:tb,bearish:tr,neutral:news.length-tb-tr,label:tb>tr?'Risk-ON':tr>tb?'Risk-OFF':'Neutral'},fetched_at:new Date().toISOString(),total:news.length};
 }
 
 // ─── SYMBOL LIST ──────────────────────────────────────────────────────────────
@@ -387,7 +430,9 @@ function NewsPanel({nd}){
         })}
       </div>
       {shown.length===0?<p style={{fontSize:11,color:'#787b86'}}>No news in this category.</p>:shown.map((n,i)=><NewsItem key={i} item={n}/>)}
-      <p style={{fontSize:9,color:'#787b86',padding:'6px 2px 0'}}>Sources: CNBC · Yahoo Finance · CoinDesk · Google News · {new Date(nd.fetched_at).toLocaleTimeString()}</p>
+      <p style={{fontSize:9,color:'#787b86',padding:'6px 2px 0'}}>
+        {nd.total||all.length} stories (max 200) · CNBC · Yahoo · CoinDesk · Google News · Updated {new Date(nd.fetched_at).toLocaleTimeString()}
+      </p>
     </div>
   );
 }
@@ -410,6 +455,7 @@ const App=()=>{
   const[futureCount,setFutureCount]=useState('');
 
   const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null);
+  const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
 
   // Chart init
   useEffect(()=>{
@@ -521,10 +567,24 @@ const App=()=>{
     return()=>clearInterval(id);
   },[symbol,tf]);
 
-  // News fetch + 60s refresh
+  // News: fetch fresh headlines, merge into 200-item rolling store, refresh every 60s
   useEffect(()=>{
-    fetchNews(symbol).then(setNd).catch(()=>{});
-    const id=setInterval(()=>fetchNews(symbol).then(setNd).catch(()=>{}),60000);
+    newsStore.current=[]; // reset store when symbol changes
+    setNd(null);
+    const poll=async()=>{
+      try{
+        const fresh=await fetchFreshNews();
+        if(!fresh.length) return;
+        // Merge fresh items on top of existing store, deduplicate, cap at 200
+        const existing=newsStore.current;
+        const seen=new Set(existing.map(n=>n.headline.slice(0,65).toLowerCase()));
+        const newOnly=fresh.filter(n=>{const k=n.headline.slice(0,65).toLowerCase();if(seen.has(k))return false;seen.add(k);return true;});
+        newsStore.current=[...newOnly,...existing].slice(0,200);
+        setNd(buildNd(newsStore.current,symbol));
+      }catch(_){}
+    };
+    poll();
+    const id=setInterval(poll,60000);
     return()=>clearInterval(id);
   },[symbol]);
 
