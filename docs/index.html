@@ -10,906 +10,701 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script>
-  tailwind.config = {
-    theme: { extend: {
-      fontFamily: { sans: ['Inter','sans-serif'] },
-      colors: {
-        tv:      '#131722',
-        tvpanel: '#1e222d',
-        tvbord:  '#2a2e39',
-        tvsub:   '#787b86',
-        primary: '#2962ff',
-        bull:    '#26a69a',
-        bear:    '#ef5350',
-      }
-    }}
-  }
-</script>
+<script>tailwind.config={theme:{extend:{fontFamily:{sans:['Inter','sans-serif']},colors:{tv:'#131722',tvpanel:'#1e222d',tvbord:'#2a2e39',tvsub:'#787b86',primary:'#2962ff',bull:'#26a69a',bear:'#ef5350'}}}}</script>
 <style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#131722;color:#d1d4dc;font-family:'Inter',sans-serif;overflow:hidden}
-  ::-webkit-scrollbar{width:4px;height:4px}
-  ::-webkit-scrollbar-track{background:#131722}
-  ::-webkit-scrollbar-thumb{background:#2a2e39;border-radius:4px}
-
-  /* Symbol search modal */
-  .search-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:flex-start;justify-content:center;padding-top:60px}
-  .search-box{background:#1e222d;border:1px solid #2a2e39;border-radius:8px;width:580px;max-height:72vh;display:flex;flex-direction:column;overflow:hidden}
-  .search-input{background:transparent;border:none;outline:none;color:#d1d4dc;font-size:16px;padding:14px 16px;border-bottom:1px solid #2a2e39;width:100%}
-  .search-result{display:flex;align-items:center;padding:9px 16px;cursor:pointer;gap:12px;transition:background .15s}
-  .search-result:hover{background:#2a2e39}
-  .badge{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600}
-  .badge-crypto{background:#2962ff22;color:#2962ff}
-  .badge-stock{background:#26a69a22;color:#26a69a}
-  .badge-etf{background:#ff980022;color:#ff9800}
-  .badge-commodity{background:#ffd60022;color:#ffd600}
-  .badge-index{background:#ab47bc22;color:#ab47bc}
-
-  /* Accordion */
-  .acc-header{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;cursor:pointer;border-radius:6px;transition:background .15s;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#787b86}
-  .acc-header:hover{background:#2a2e39}
-  .acc-body{padding:0 4px 8px}
-
-  /* Pulse animations */
-  .pulse-bull{animation:pBull 2s infinite}
-  .pulse-bear{animation:pBear 2s infinite}
-  @keyframes pBull{0%{box-shadow:0 0 0 0 rgba(38,166,154,.4)}70%{box-shadow:0 0 0 8px rgba(38,166,154,0)}100%{box-shadow:0 0 0 0 rgba(38,166,154,0)}}
-  @keyframes pBear{0%{box-shadow:0 0 0 0 rgba(239,83,80,.4)}70%{box-shadow:0 0 0 8px rgba(239,83,80,0)}100%{box-shadow:0 0 0 0 rgba(239,83,80,0)}}
-
-  /* Summary table */
-  .sum-table{width:100%;border-collapse:collapse;font-size:11px}
-  .sum-table td{padding:5px 8px;border-bottom:1px solid #2a2e39}
-  .sum-table td:first-child{color:#787b86;white-space:nowrap;width:40%}
-  .sum-table td:last-child{color:#d1d4dc;font-weight:500}
-
-  /* News panel */
-  .news-item{padding:8px 4px;border-bottom:1px solid #2a2e39;cursor:pointer;transition:background .15s}
-  .news-item:hover{background:#13172288}
-  .nbull{background:#26a69a22;color:#26a69a;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
-  .nbear{background:#ef535022;color:#ef5350;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
-  .nneutral{background:#787b8622;color:#787b86;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
-  .nmacro{background:#ff980022;color:#ff9800;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:600}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#131722;color:#d1d4dc;font-family:'Inter',sans-serif;overflow:hidden}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:#131722}
+::-webkit-scrollbar-thumb{background:#2a2e39;border-radius:4px}
+.search-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:flex;align-items:flex-start;justify-content:center;padding-top:60px}
+.search-box{background:#1e222d;border:1px solid #2a2e39;border-radius:8px;width:580px;max-height:72vh;display:flex;flex-direction:column;overflow:hidden}
+.search-input{background:transparent;border:none;outline:none;color:#d1d4dc;font-size:16px;padding:14px 16px;border-bottom:1px solid #2a2e39;width:100%}
+.search-result{display:flex;align-items:center;padding:9px 16px;cursor:pointer;gap:12px;transition:background .15s}
+.search-result:hover{background:#2a2e39}
+.badge{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:600}
+.badge-crypto{background:#2962ff22;color:#2962ff}
+.badge-stock{background:#26a69a22;color:#26a69a}
+.badge-etf{background:#ff980022;color:#ff9800}
+.badge-commodity{background:#ffd60022;color:#ffd600}
+.badge-index{background:#ab47bc22;color:#ab47bc}
+.acc-header{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;cursor:pointer;border-radius:6px;transition:background .15s;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#787b86}
+.acc-header:hover{background:#2a2e39}
+.acc-body{padding:0 4px 8px}
+.pulse-bull{animation:pBull 2s infinite}
+.pulse-bear{animation:pBear 2s infinite}
+@keyframes pBull{0%{box-shadow:0 0 0 0 rgba(38,166,154,.4)}70%{box-shadow:0 0 0 8px rgba(38,166,154,0)}100%{box-shadow:0 0 0 0 rgba(38,166,154,0)}}
+@keyframes pBear{0%{box-shadow:0 0 0 0 rgba(239,83,80,.4)}70%{box-shadow:0 0 0 8px rgba(239,83,80,0)}100%{box-shadow:0 0 0 0 rgba(239,83,80,0)}}
+.sum-table{width:100%;border-collapse:collapse;font-size:11px}
+.sum-table td{padding:5px 8px;border-bottom:1px solid #2a2e39}
+.sum-table td:first-child{color:#787b86;white-space:nowrap;width:40%}
+.sum-table td:last-child{color:#d1d4dc;font-weight:500}
+.news-item{padding:8px 4px;border-bottom:1px solid #2a2e39;cursor:pointer;transition:background .15s}
+.news-item:hover{background:#13172288}
+.nbull{background:#26a69a22;color:#26a69a;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
+.nbear{background:#ef535022;color:#ef5350;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
+.nneutral{background:#787b8622;color:#787b86;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback, useMemo } = React;
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
 
-// Auto-detect backend: use query param ?api=https://... or default to localhost
-const _urlParam = new URLSearchParams(window.location.search).get('api');
-const API = _urlParam ? _urlParam.replace(/\/$/, '') : 'http://127.0.0.1:8000';
-const WS  = API.replace(/^http/, 'ws');
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const BINANCE_REST='https://api.binance.com/api/v3';
+const BINANCE_WS='wss://stream.binance.com:9443/ws';
+const TIMEFRAMES=['1m','5m','15m','1h','4h','1d','1w'];
+const TF_SECS={'1m':60,'5m':300,'15m':900,'1h':3600,'4h':14400,'1d':86400,'1w':604800};
+const BINANCE_TF={'1m':'1m','5m':'5m','15m':'15m','1h':'1h','4h':'4h','1d':'1d','1w':'1w'};
+const YF_TF={'1m':['1m','1d'],'5m':['5m','5d'],'15m':['15m','60d'],'1h':['1h','1y'],'4h':['1h','2y'],'1d':['1d','5y'],'1w':['1wk','max']};
 
-// ── tiny helpers ────────────────────────────────────────────────────────────
-const TIMEFRAMES = ['1m','5m','15m','1h','4h','1d','1w'];
-
-function smartDec(p){
-  if(!p||p<=0)return 2;
-  if(p<0.000001)return 8; if(p<0.00001)return 8; if(p<0.0001)return 8;
-  if(p<0.001)return 7;    if(p<0.01)return 6;     if(p<0.1)return 5;
-  if(p<1)return 4;        if(p<100)return 3;       if(p<10000)return 2;
-  return 1;
+// ─── TA ENGINE (pure JS) ──────────────────────────────────────────────────────
+function calcEMA(arr,p){
+  if(!arr||arr.length<p) return arr.map(()=>arr[arr.length-1]||0);
+  const k=2/(p+1),r=[];
+  let s=0; for(let i=0;i<p;i++){s+=arr[i];r.push(null);} r[p-1]=s/p;
+  for(let i=p;i<arr.length;i++) r.push(arr[i]*k+r[i-1]*(1-k));
+  return r;
 }
-function fmtPrice(v,d){
-  if(v==null)return '—';
-  d = Math.min(d??2, 8);
-  return Number(v).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+function calcRSI(c,p=14){
+  if(c.length<=p) return c.map(()=>50);
+  let g=0,l=0;
+  for(let i=1;i<=p;i++){const d=c[i]-c[i-1];if(d>=0)g+=d;else l-=d;}
+  let ag=g/p,al=l/p;
+  const r=new Array(p).fill(50);
+  r.push(al<1e-9?100:100-100/(1+ag/al));
+  for(let i=p+1;i<c.length;i++){
+    const d=c[i]-c[i-1];
+    ag=((ag*(p-1))+(d>0?d:0))/p;
+    al=((al*(p-1))+(d<0?-d:0))/p;
+    r.push(al<1e-9?100:100-100/(1+ag/al));
+  }
+  return r;
 }
-function clsDir(dir){return dir==='Bullish'?'text-bull':'text-bear'}
-
-// UTC-safe timestamp parser: handles "2024-04-12 19:00:00" (space, no Z) → ms
-const tsToSec = ts => {
-  const s = String(ts).replace(' ','T');
-  return Math.floor(new Date(s.endsWith('Z')?s:s+'Z').getTime()/1000);
-};
-
-// ── Accordion section ────────────────────────────────────────────────────────
-function Section({title, icon, children, open:defOpen=true}){
-  const [open,setOpen]=useState(defOpen);
-  return(
-    <div className="mb-1">
-      <div className="acc-header" onClick={()=>setOpen(!open)}>
-        <span>{icon} {title}</span>
-        <span style={{fontSize:9}}>{open?'▲':'▼'}</span>
-      </div>
-      {open&&<div className="acc-body">{children}</div>}
-    </div>
-  );
+function calcATR(h,l,c,p=14){
+  const tr=[h[0]-l[0]];
+  for(let i=1;i<h.length;i++) tr.push(Math.max(h[i]-l[i],Math.abs(h[i]-c[i-1]),Math.abs(l[i]-c[i-1])));
+  let a=tr.slice(0,p).reduce((s,v)=>s+v,0)/p;
+  const r=new Array(p-1).fill(null); r.push(a);
+  for(let i=p;i<tr.length;i++){a=(a*(p-1)+tr[i])/p;r.push(a);}
+  return r;
+}
+function detectSwings(h,l,lb=5){
+  const sh=[],sl=[];
+  for(let i=lb;i<h.length-lb;i++){
+    if(h.slice(i-lb,i).every(x=>x<h[i])&&h.slice(i+1,i+lb+1).every(x=>x<h[i])) sh.push({idx:i,price:h[i]});
+    if(l.slice(i-lb,i).every(x=>x>l[i])&&l.slice(i+1,i+lb+1).every(x=>x>l[i])) sl.push({idx:i,price:l[i]});
+  }
+  return{sh:sh.slice(-5),sl:sl.slice(-5)};
+}
+function detectFVG(candles){
+  const r=[];
+  for(let i=2;i<candles.length;i++){
+    if(candles[i].low>candles[i-2].high) r.push({idx:i-1,type:'bull'});
+    if(candles[i].high<candles[i-2].low) r.push({idx:i-1,type:'bear'});
+  }
+  return r.slice(-5);
+}
+function detectBOS(candles,sw){
+  const r=[];
+  for(let i=1;i<candles.length;i++){
+    for(const s of sw.sh) if(i>s.idx&&candles[i].close>s.price&&candles[i-1].close<=s.price) r.push({idx:i,type:'bull'});
+    for(const s of sw.sl) if(i>s.idx&&candles[i].close<s.price&&candles[i-1].close>=s.price) r.push({idx:i,type:'bear'});
+  }
+  return r.slice(-5);
+}
+function candleType(c){
+  const body=Math.abs(c.close-c.open),range=c.high-c.low||1;
+  const uw=c.high-Math.max(c.open,c.close),lw=Math.min(c.open,c.close)-c.low;
+  if(body/range>0.75) return c.close>c.open?'Bullish Marubozu':'Bearish Marubozu';
+  if(body/range<0.1) return 'Doji';
+  if(lw>body*2&&uw<body) return 'Hammer / Bullish Reversal';
+  if(uw>body*2&&lw<body) return 'Shooting Star / Bearish';
+  return c.close>c.open?'Bullish Candle':'Bearish Candle';
+}
+function futureCandlesSim(candles,signal,atr,count){
+  let p=candles[candles.length-1].close;
+  return Array.from({length:count},(_,i)=>{
+    const dir=signal==='LONG'?1:-1;
+    const move=dir*atr*0.38*(1+Math.sin(i)*0.2);
+    const o=p,c=p+move,wick=atr*0.15;
+    p=c;
+    return{open:o,high:Math.max(o,c)+wick,low:Math.min(o,c)-wick,close:c};
+  });
+}
+function generateSetup(candles,price){
+  if(!candles||candles.length<55) return null;
+  const C=candles.map(c=>c.close),H=candles.map(c=>c.high),L=candles.map(c=>c.low);
+  const e9=calcEMA(C,9),e21=calcEMA(C,21),e50=calcEMA(C,50);
+  const rsi=calcRSI(C,14),atrArr=calcATR(H,L,C,14);
+  const le9=e9[e9.length-1]||price,le21=e21[e21.length-1]||price,le50=e50[e50.length-1]||price;
+  const lRSI=rsi[rsi.length-1]||50,lATR=atrArr[atrArr.length-1]||price*0.01;
+  const sw=detectSwings(H,L);
+  const fvg=detectFVG(candles),bos=detectBOS(candles,sw);
+  const bullBias=price>le9&&le9>le21&&le21>le50;
+  const bearBias=price<le9&&le9<le21&&le21<le50;
+  const htf=bullBias?'Bullish':bearBias?'Bearish':'Neutral';
+  const bullPct=(price>le9?25:0)+(price>le21?20:0)+(price>le50?15:0)+(lRSI>50?20:0)+(bos.filter(b=>b.type==='bull').length>0?20:0);
+  let signal=bearBias&&lRSI>35?'SHORT':'LONG';
+  if(bullBias&&lRSI<72) signal='LONG';
+  const isL=signal==='LONG';
+  const sl=isL?price-lATR*1.5:price+lATR*1.5;
+  const tp1=isL?price+lATR*2:price-lATR*2;
+  const tp2=isL?price+lATR*4:price-lATR*4;
+  const d=Math.abs(price-sl)||1;
+  const rh=H.slice(-30).sort((a,b)=>b-a),rl=L.slice(-30).sort((a,b)=>a-b);
+  let phase='Accumulation';
+  if(bullBias&&lRSI>55) phase='Markup';
+  else if(bearBias&&lRSI<45) phase='Markdown';
+  else if(price>le50&&lRSI>60) phase='Distribution';
+  const lc=candles[candles.length-1];
+  const TF_DEF={'1m':60,'5m':24,'15m':12,'1h':8,'4h':6,'1d':1,'1w':1};
+  return{
+    signal,htf_bias:htf,phase,bull_pct:bullPct,bear_pct:100-bullPct,
+    rsi:lRSI.toFixed(1),atr:lATR.toFixed(price>100?2:6),
+    ema9:le9,ema21:le21,ema50:le50,
+    entry_zone:[isL?price*0.9998:price,isL?price:price*1.0002],
+    stop_loss:sl,take_profit_1:tp1,take_profit_2:tp2,
+    rr1:`1:${(Math.abs(tp1-price)/d).toFixed(1)}`,
+    rr2:`1:${(Math.abs(tp2-price)/d).toFixed(1)}`,
+    leverage:lRSI<30||lRSI>70?3:lATR/price<0.01?10:5,
+    fvg,bos,
+    bsl:[rh[0],rh[1],rh[2]].filter(Boolean),
+    ssl:[rl[0],rl[1],rl[2]].filter(Boolean),
+    next_dir:C.slice(-3)[2]>C.slice(-3)[0]?'Bullish':'Bearish',
+    next_type:candleType(lc),
+    next_size:lATR/price>0.02?'Large':lATR/price>0.008?'Medium':'Small',
+    confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
+    future_candles:futureCandlesSim(candles,signal,lATR,12),
+  };
 }
 
-// ── Small stat tile ─────────────────────────────────────────────────────────
-function Tile({label,value,color}){
-  return(
-    <div className="bg-[#131722] rounded p-2">
-      <p className="text-[10px] text-tvsub mb-0.5">{label}</p>
-      <p className={`text-xs font-semibold ${color||'text-white'}`}>{value||'—'}</p>
-    </div>
-  );
+// ─── DATA FETCHING ─────────────────────────────────────────────────────────────
+function isCrypto(s){return s.includes('/');}
+async function fetchBinance(symbol,tf,limit=600){
+  const sym=symbol.replace('/','');
+  const r=await fetch(`${BINANCE_REST}/klines?symbol=${sym}&interval=${BINANCE_TF[tf]||'1h'}&limit=${limit}`);
+  if(!r.ok) throw new Error(`Binance ${r.status}`);
+  return (await r.json()).map(k=>({timestamp:+k[0],open:+k[1],high:+k[2],low:+k[3],close:+k[4],volume:+k[5]}));
+}
+async function fetchYF(symbol,tf,limit=600){
+  const[iv,range]=YF_TF[tf]||['1h','1y'];
+  const enc=encodeURIComponent(`https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${iv}&range=${range}&includePrePost=false`);
+  let data;
+  const proxies=[
+    `https://api.allorigins.win/raw?url=${enc}`,
+    `https://corsproxy.io/?${enc}`,
+  ];
+  let lastErr;
+  for(const p of proxies){
+    try{const r=await fetch(p);if(r.ok){data=await r.json();break;}}
+    catch(e){lastErr=e;}
+  }
+  if(!data) throw new Error(`No data for ${symbol}: ${lastErr}`);
+  const res=data?.chart?.result?.[0];
+  if(!res) throw new Error(`Empty chart data for ${symbol}`);
+  const ts=res.timestamp,q=res.indicators?.quote?.[0];
+  if(!ts||!q) throw new Error(`Missing OHLCV for ${symbol}`);
+  let candles=ts.map((t,i)=>({timestamp:t*1000,open:q.open?.[i],high:q.high?.[i],low:q.low?.[i],close:q.close?.[i],volume:q.volume?.[i]||0}))
+    .filter(c=>c.open&&c.high&&c.low&&c.close&&isFinite(c.close));
+  if(tf==='4h'){
+    const b=[];
+    for(let i=0;i<candles.length;i+=4){
+      const s=candles.slice(i,i+4);if(!s.length)continue;
+      b.push({timestamp:s[0].timestamp,open:s[0].open,high:Math.max(...s.map(x=>x.high)),low:Math.min(...s.map(x=>x.low)),close:s[s.length-1].close,volume:s.reduce((a,c)=>a+c.volume,0)});
+    }
+    candles=b;
+  }
+  return candles.slice(-limit);
+}
+async function fetchCandles(symbol,tf,limit=600){
+  return isCrypto(symbol)?fetchBinance(symbol,tf,limit):fetchYF(symbol,tf,limit);
 }
 
-// ── Category colours ─────────────────────────────────────────────────────────
-const CAT_COLORS = {
-  'FED / RATES':    '#ff9800',
-  'WAR / GEO':      '#f44336',
-  'CRYPTO REG':     '#2962ff',
-  'EARNINGS':       '#26a69a',
-  'MACRO / ECONOMY':'#ab47bc',
-  'CRYPTO MARKET':  '#00bcd4',
-  'STOCK MARKET':   '#8bc34a',
-  'MARKET NEWS':    '#787b86',
-};
+// ─── NEWS ─────────────────────────────────────────────────────────────────────
+const RSS_FEEDS=[
+  {u:'https://feeds.finance.yahoo.com/rss/2.0/headline?s=%5EGSPC&region=US&lang=en-US',s:'Yahoo Finance'},
+  {u:'https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD&region=US&lang=en-US',s:'Yahoo Crypto'},
+  {u:'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114',s:'CNBC Markets'},
+  {u:'https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100727362',s:'CNBC Crypto'},
+  {u:'https://www.coindesk.com/arc/outboundfeeds/rss/',s:'CoinDesk'},
+  {u:'https://news.google.com/rss/search?q=federal+reserve+interest+rate&hl=en-US&gl=US&ceid=US:en',s:'Google News (Fed)'},
+  {u:'https://news.google.com/rss/search?q=war+conflict+geopolitical+market&hl=en-US&gl=US&ceid=US:en',s:'Google News (Geo)'},
+  {u:'https://news.google.com/rss/search?q=bitcoin+crypto+market&hl=en-US&gl=US&ceid=US:en',s:'Google News (Crypto)'},
+];
+const KWB=['rate cut','fed cut','pivot','dovish','stimulus','rally','surge','upgrade','ceasefire','recovery','beat','approves bitcoin','trade deal'];
+const KWR=['rate hike','hawkish','recession','war','attack','invasion','airstrike','crash','plunge','ban','default','stagflation','crackdown','layoffs','sanctions'];
+const CATS={'FED / RATES':['fed','fomc','powell','rate cut','rate hike','interest rate','cpi','inflation','basis points','treasury yield'],'WAR / GEO':['war','attack','invasion','airstrike','missile','ukraine','russia','israel','gaza','iran','nato','nuclear','geopolit'],'CRYPTO REG':['sec','cftc','bitcoin etf','crypto regulation','binance','coinbase charged','cbdc'],'CRYPTO MARKET':['bitcoin','btc','ethereum','eth','solana','sol','crypto','defi','halving'],'EARNINGS':['earnings','revenue','profit','eps','quarterly','beats','misses','guidance'],'MACRO / ECONOMY':['gdp','unemployment','jobs report','nonfarm','pmi','recession','imf','world bank'],'STOCK MARKET':["s&p 500","nasdaq","dow jones","wall street","ipo","merger"]};
+const CAT_COLORS={'FED / RATES':'#ff9800','WAR / GEO':'#f44336','CRYPTO REG':'#2962ff','EARNINGS':'#26a69a','MACRO / ECONOMY':'#ab47bc','CRYPTO MARKET':'#00bcd4','STOCK MARKET':'#8bc34a','MARKET NEWS':'#787b86'};
+function scoreItem(title){
+  const t=title.toLowerCase();
+  const bull=KWB.filter(k=>t.includes(k)).length,bear=KWR.filter(k=>t.includes(k)).length;
+  const hi=['war','invasion','attack','rate cut','rate hike','crash','recession','ceasefire','default'].some(k=>t.includes(k))?2:1;
+  if(bull>bear){const p=Math.min(1+bull*0.7*hi,5);return{sentiment:'bullish',impact_pct:+p.toFixed(1),impact_label:p>=3?'HIGH':p>=1.5?'MEDIUM':'LOW'};}
+  if(bear>bull){const p=Math.min(1+bear*0.7*hi,5);return{sentiment:'bearish',impact_pct:+p.toFixed(1),impact_label:p>=3?'HIGH':p>=1.5?'MEDIUM':'LOW'};}
+  return{sentiment:'neutral',impact_pct:0.3,impact_label:'LOW'};
+}
+function detectCat(t){const tl=t.toLowerCase();for(const[c,ks]of Object.entries(CATS))if(ks.some(k=>tl.includes(k)))return c;return'MARKET NEWS';}
+async function fetchNews(symbol){
+  const all=[];
+  await Promise.allSettled(RSS_FEEDS.map(async feed=>{
+    try{
+      const url=`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feed.u)}&count=15&api_key=`;
+      const r=await fetch(url);const d=await r.json();
+      if(d.items){for(const it of d.items){const sc=scoreItem(it.title);all.push({headline:it.title,url:it.link,source:feed.s,timestamp:it.pubDate||new Date().toISOString(),...sc,category:detectCat(it.title)});}}
+    }catch(_){}
+  }));
+  const seen=new Set(),deduped=[];
+  for(const n of all.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp))){
+    const k=n.headline.slice(0,60).toLowerCase();if(!seen.has(k)){seen.add(k);deduped.push(n);}
+  }
+  const coin=isCrypto(symbol)?symbol.split('/')[0].toLowerCase():symbol.split('=')[0].replace('^','').toLowerCase();
+  const symNews=deduped.filter(n=>n.headline.toLowerCase().includes(coin));
+  const high=deduped.filter(n=>n.impact_label==='HIGH');
+  const tb=deduped.filter(n=>n.sentiment==='bullish').length,tr=deduped.filter(n=>n.sentiment==='bearish').length;
+  const cats={};
+  for(const n of deduped){if(!cats[n.category])cats[n.category]={count:0,bullish:0,bearish:0,neutral:0};cats[n.category].count++;cats[n.category][n.sentiment]++;}
+  return{news:deduped.slice(0,40),symbol_news:symNews.slice(0,8),high_impact:high.slice(0,5),category_summary:cats,overall_sentiment:{bullish:tb,bearish:tr,neutral:deduped.length-tb-tr,label:tb>tr?'Risk-ON':tr>tb?'Risk-OFF':'Neutral'},fetched_at:new Date().toISOString()};
+}
+
+// ─── SYMBOL LIST ──────────────────────────────────────────────────────────────
+const CRYPTO_LIST=[
+  {symbol:'BTC/USDT',name:'Bitcoin',exchange:'Binance',type:'crypto'},{symbol:'ETH/USDT',name:'Ethereum',exchange:'Binance',type:'crypto'},
+  {symbol:'BNB/USDT',name:'BNB',exchange:'Binance',type:'crypto'},{symbol:'SOL/USDT',name:'Solana',exchange:'Binance',type:'crypto'},
+  {symbol:'XRP/USDT',name:'Ripple',exchange:'Binance',type:'crypto'},{symbol:'DOGE/USDT',name:'Dogecoin',exchange:'Binance',type:'crypto'},
+  {symbol:'ADA/USDT',name:'Cardano',exchange:'Binance',type:'crypto'},{symbol:'AVAX/USDT',name:'Avalanche',exchange:'Binance',type:'crypto'},
+  {symbol:'LINK/USDT',name:'Chainlink',exchange:'Binance',type:'crypto'},{symbol:'DOT/USDT',name:'Polkadot',exchange:'Binance',type:'crypto'},
+  {symbol:'MATIC/USDT',name:'Polygon',exchange:'Binance',type:'crypto'},{symbol:'UNI/USDT',name:'Uniswap',exchange:'Binance',type:'crypto'},
+  {symbol:'LTC/USDT',name:'Litecoin',exchange:'Binance',type:'crypto'},{symbol:'ATOM/USDT',name:'Cosmos',exchange:'Binance',type:'crypto'},
+  {symbol:'NEAR/USDT',name:'NEAR Protocol',exchange:'Binance',type:'crypto'},{symbol:'ARB/USDT',name:'Arbitrum',exchange:'Binance',type:'crypto'},
+  {symbol:'OP/USDT',name:'Optimism',exchange:'Binance',type:'crypto'},{symbol:'SUI/USDT',name:'Sui',exchange:'Binance',type:'crypto'},
+  {symbol:'APT/USDT',name:'Aptos',exchange:'Binance',type:'crypto'},{symbol:'INJ/USDT',name:'Injective',exchange:'Binance',type:'crypto'},
+  {symbol:'TRX/USDT',name:'TRON',exchange:'Binance',type:'crypto'},{symbol:'TON/USDT',name:'Toncoin',exchange:'Binance',type:'crypto'},
+  {symbol:'SHIB/USDT',name:'Shiba Inu',exchange:'Binance',type:'crypto'},{symbol:'PEPE/USDT',name:'Pepe',exchange:'Binance',type:'crypto'},
+  {symbol:'WLD/USDT',name:'Worldcoin',exchange:'Binance',type:'crypto'},{symbol:'JUP/USDT',name:'Jupiter',exchange:'Binance',type:'crypto'},
+  {symbol:'WIF/USDT',name:'dogwifhat',exchange:'Binance',type:'crypto'},{symbol:'BONK/USDT',name:'Bonk',exchange:'Binance',type:'crypto'},
+  {symbol:'RENDER/USDT',name:'Render Network',exchange:'Binance',type:'crypto'},{symbol:'FET/USDT',name:'Fetch.ai',exchange:'Binance',type:'crypto'},
+  {symbol:'GRT/USDT',name:'The Graph',exchange:'Binance',type:'crypto'},{symbol:'LDO/USDT',name:'Lido DAO',exchange:'Binance',type:'crypto'},
+  {symbol:'MKR/USDT',name:'Maker',exchange:'Binance',type:'crypto'},{symbol:'AAVE/USDT',name:'Aave',exchange:'Binance',type:'crypto'},
+  {symbol:'BCH/USDT',name:'Bitcoin Cash',exchange:'Binance',type:'crypto'},{symbol:'FIL/USDT',name:'Filecoin',exchange:'Binance',type:'crypto'},
+  {symbol:'SEI/USDT',name:'Sei Network',exchange:'Binance',type:'crypto'},{symbol:'ENA/USDT',name:'Ethena',exchange:'Binance',type:'crypto'},
+  {symbol:'ETH/BTC',name:'Ethereum/BTC',exchange:'Binance',type:'crypto'},{symbol:'SOL/BTC',name:'Solana/BTC',exchange:'Binance',type:'crypto'},
+];
+const STOCK_LIST=[
+  {symbol:'AAPL',name:'Apple Inc.',exchange:'NASDAQ',type:'stock'},{symbol:'MSFT',name:'Microsoft Corp.',exchange:'NASDAQ',type:'stock'},
+  {symbol:'NVDA',name:'NVIDIA Corp.',exchange:'NASDAQ',type:'stock'},{symbol:'GOOGL',name:'Alphabet Inc.',exchange:'NASDAQ',type:'stock'},
+  {symbol:'AMZN',name:'Amazon.com Inc.',exchange:'NASDAQ',type:'stock'},{symbol:'META',name:'Meta Platforms',exchange:'NASDAQ',type:'stock'},
+  {symbol:'TSLA',name:'Tesla Inc.',exchange:'NASDAQ',type:'stock'},{symbol:'AMD',name:'Advanced Micro Devices',exchange:'NASDAQ',type:'stock'},
+  {symbol:'INTC',name:'Intel Corp.',exchange:'NASDAQ',type:'stock'},{symbol:'AVGO',name:'Broadcom Inc.',exchange:'NASDAQ',type:'stock'},
+  {symbol:'NFLX',name:'Netflix Inc.',exchange:'NASDAQ',type:'stock'},{symbol:'CRM',name:'Salesforce Inc.',exchange:'NYSE',type:'stock'},
+  {symbol:'ORCL',name:'Oracle Corp.',exchange:'NYSE',type:'stock'},{symbol:'PLTR',name:'Palantir Technologies',exchange:'NASDAQ',type:'stock'},
+  {symbol:'COIN',name:'Coinbase Global',exchange:'NASDAQ',type:'stock'},{symbol:'MSTR',name:'MicroStrategy',exchange:'NASDAQ',type:'stock'},
+  {symbol:'MARA',name:'Marathon Digital',exchange:'NASDAQ',type:'stock'},{symbol:'RIOT',name:'Riot Platforms',exchange:'NASDAQ',type:'stock'},
+  {symbol:'SMCI',name:'Super Micro Computer',exchange:'NASDAQ',type:'stock'},{symbol:'APP',name:'AppLovin Corp.',exchange:'NASDAQ',type:'stock'},
+  {symbol:'JPM',name:'JPMorgan Chase',exchange:'NYSE',type:'stock'},{symbol:'BAC',name:'Bank of America',exchange:'NYSE',type:'stock'},
+  {symbol:'GS',name:'Goldman Sachs',exchange:'NYSE',type:'stock'},{symbol:'V',name:'Visa Inc.',exchange:'NYSE',type:'stock'},
+  {symbol:'MA',name:'Mastercard Inc.',exchange:'NYSE',type:'stock'},{symbol:'JNJ',name:'Johnson & Johnson',exchange:'NYSE',type:'stock'},
+  {symbol:'PFE',name:'Pfizer Inc.',exchange:'NYSE',type:'stock'},{symbol:'MRNA',name:'Moderna Inc.',exchange:'NASDAQ',type:'stock'},
+  {symbol:'LLY',name:'Eli Lilly & Co.',exchange:'NYSE',type:'stock'},{symbol:'XOM',name:'ExxonMobil',exchange:'NYSE',type:'stock'},
+  {symbol:'WMT',name:'Walmart Inc.',exchange:'NYSE',type:'stock'},{symbol:'MCD',name:"McDonald's Corp.",exchange:'NYSE',type:'stock'},
+  {symbol:'NKE',name:'Nike Inc.',exchange:'NYSE',type:'stock'},{symbol:'KO',name:'Coca-Cola Co.',exchange:'NYSE',type:'stock'},
+  {symbol:'SHOP',name:'Shopify Inc.',exchange:'NYSE',type:'stock'},{symbol:'UBER',name:'Uber Technologies',exchange:'NYSE',type:'stock'},
+  {symbol:'SPY',name:'SPDR S&P 500 ETF',exchange:'NYSE',type:'etf'},{symbol:'QQQ',name:'Invesco QQQ ETF',exchange:'NASDAQ',type:'etf'},
+  {symbol:'IWM',name:'iShares Russell 2000',exchange:'NYSE',type:'etf'},{symbol:'GLD',name:'SPDR Gold ETF',exchange:'NYSE',type:'etf'},
+  {symbol:'SLV',name:'iShares Silver ETF',exchange:'NYSE',type:'etf'},{symbol:'TLT',name:'iShares 20Y Treasury',exchange:'NASDAQ',type:'etf'},
+  {symbol:'ARKK',name:'ARK Innovation ETF',exchange:'NYSE',type:'etf'},{symbol:'XLF',name:'Financial Select Sector',exchange:'NYSE',type:'etf'},
+  {symbol:'XLK',name:'Technology Select Sector',exchange:'NYSE',type:'etf'},{symbol:'USO',name:'US Oil Fund',exchange:'NYSE',type:'etf'},
+  {symbol:'GC=F',name:'Gold Futures',exchange:'COMEX',type:'commodity'},{symbol:'SI=F',name:'Silver Futures',exchange:'COMEX',type:'commodity'},
+  {symbol:'CL=F',name:'Crude Oil WTI',exchange:'NYMEX',type:'commodity'},{symbol:'NG=F',name:'Natural Gas',exchange:'NYMEX',type:'commodity'},
+  {symbol:'^GSPC',name:'S&P 500 Index',exchange:'INDEX',type:'index'},{symbol:'^IXIC',name:'NASDAQ Composite',exchange:'INDEX',type:'index'},
+  {symbol:'^DJI',name:'Dow Jones Industrial',exchange:'INDEX',type:'index'},{symbol:'^VIX',name:'CBOE Volatility Index',exchange:'INDEX',type:'index'},
+];
+const ALL_SYMBOLS=[...CRYPTO_LIST,...STOCK_LIST];
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function smartDec(p){if(!p||p<=0)return 2;if(p<0.0001)return 8;if(p<0.01)return 6;if(p<1)return 4;if(p<100)return 3;if(p<10000)return 2;return 1;}
+function fmt(v,d){if(v==null)return'—';return Number(v).toLocaleString(undefined,{minimumFractionDigits:Math.min(d??2,8),maximumFractionDigits:Math.min(d??2,8)});}
+function clsDir(d){return d==='Bullish'?'text-bull':'text-bear';}
+const tsToSec=ts=>{const s=String(ts).replace(' ','T');return Math.floor(new Date(s.endsWith('Z')?s:s+'Z').getTime()/1000);};
+
+// ─── COMPONENTS ───────────────────────────────────────────────────────────────
+function Section({title,icon,children,open:def=true}){
+  const[open,setOpen]=useState(def);
+  return(<div className="mb-1"><div className="acc-header" onClick={()=>setOpen(!open)}><span>{icon} {title}</span><span style={{fontSize:9}}>{open?'▲':'▼'}</span></div>{open&&<div className="acc-body">{children}</div>}</div>);
+}
+function Tile({label,value,color}){return(<div className="bg-[#131722] rounded p-2"><p className="text-[10px] text-tvsub mb-0.5">{label}</p><p className={`text-xs font-semibold ${color||'text-white'}`}>{value||'—'}</p></div>);}
 
 function NewsItem({item}){
-  const sentColor = item.sentiment==='bullish'?'#26a69a':item.sentiment==='bearish'?'#ef5350':'#787b86';
-  const catColor  = CAT_COLORS[item.category]||'#787b86';
-  const impactLbl = item.impact_label||'';
+  const sc=item.sentiment==='bullish'?'#26a69a':item.sentiment==='bearish'?'#ef5350':'#787b86';
+  const cc=CAT_COLORS[item.category]||'#787b86';
   return(
-    <div className="news-item" onClick={()=>item.url&&window.open(item.url,'_blank','noopener,noreferrer')}>
-      {/* Row 1: category + sentiment + impact */}
+    <div className="news-item" onClick={()=>item.url&&window.open(item.url,'_blank','noopener')}>
       <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:3,flexWrap:'wrap'}}>
-        <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,
-                      background:catColor+'22',color:catColor}}>
-          {item.category}
-        </span>
-        <span className={item.sentiment==='bullish'?'nbull':item.sentiment==='bearish'?'nbear':'nneutral'}>
-          {item.sentiment==='bullish'?'▲ BULL':item.sentiment==='bearish'?'▼ BEAR':'● NEUT'}
-        </span>
-        {impactLbl==='HIGH'&&(
-          <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,
-                        background:'#ff000022',color:'#ff5252',border:'1px solid #ff525244'}}>
-            🔴 HIGH IMPACT
-          </span>
-        )}
-        {impactLbl==='MEDIUM'&&(
-          <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,
-                        background:'#ff980022',color:'#ff9800'}}>
-            🟡 MED
-          </span>
-        )}
-        <span style={{fontSize:9,color:'#787b86',marginLeft:'auto',textAlign:'right'}}>{item.source}</span>
+        <span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,background:cc+'22',color:cc}}>{item.category}</span>
+        <span className={item.sentiment==='bullish'?'nbull':item.sentiment==='bearish'?'nbear':'nneutral'}>{item.sentiment==='bullish'?'▲ BULL':item.sentiment==='bearish'?'▼ BEAR':'● NEUT'}</span>
+        {item.impact_label==='HIGH'&&<span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,background:'#ff000022',color:'#ff5252',border:'1px solid #ff525244'}}>🔴 HIGH IMPACT</span>}
+        {item.impact_label==='MEDIUM'&&<span style={{fontSize:9,fontWeight:700,padding:'1px 5px',borderRadius:3,background:'#ff980022',color:'#ff9800'}}>🟡 MED</span>}
+        <span style={{fontSize:9,color:'#787b86',marginLeft:'auto'}}>{item.source}</span>
       </div>
-      {/* Row 2: headline */}
       <p style={{fontSize:11,color:'#d1d4dc',lineHeight:1.45,marginBottom:3}}>{item.headline}</p>
-      {/* Row 3: time + impact pct */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <span style={{fontSize:10,color:'#787b86'}}>
-          {new Date(item.timestamp).toLocaleString(undefined,
-            {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}
-        </span>
-        {item.impact_pct>0&&(
-          <span style={{fontSize:10,fontWeight:600,color:sentColor}}>
-            ~{item.impact_pct}% impact
-          </span>
-        )}
+        <span style={{fontSize:10,color:'#787b86'}}>{new Date(item.timestamp).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+        {item.impact_pct>0&&<span style={{fontSize:10,fontWeight:600,color:sc}}>~{item.impact_pct}% impact</span>}
       </div>
     </div>
   );
 }
-
-// ── News Panel component ─────────────────────────────────────────────────────
-function NewsPanel({newsData}){
-  const [activeTab, setActiveTab] = useState('ALL');
-
-  if(!newsData) return(
-    <p style={{fontSize:11,color:'#787b86',padding:'6px 4px'}}>Loading news…</p>
-  );
-
-  const allNews      = newsData.news      || [];
-  const symbolNews   = newsData.symbol_news|| [];
-  const highImpact   = newsData.high_impact|| [];
-  const overall      = newsData.overall_sentiment || {};
-  const catSummary   = newsData.category_summary  || {};
-
-  if(allNews.length===0)
-    return <p style={{fontSize:11,color:'#787b86',padding:'6px 4px'}}>No news available — check back soon.</p>;
-
-  // All unique categories present
-  const allCats = ['ALL','HIGH IMPACT','SYMBOL',...Object.keys(CAT_COLORS)].filter(c=>{
-    if(c==='ALL') return true;
-    if(c==='HIGH IMPACT') return highImpact.length>0;
-    if(c==='SYMBOL') return symbolNews.length>0;
-    return catSummary[c]?.count > 0;
+function NewsPanel({nd}){
+  const[tab,setTab]=useState('ALL');
+  if(!nd)return<p style={{fontSize:11,color:'#787b86',padding:'6px 4px'}}>Loading news…</p>;
+  const all=nd.news||[],sym=nd.symbol_news||[],hi=nd.high_impact||[],ov=nd.overall_sentiment||{},cs=nd.category_summary||{};
+  if(!all.length)return<p style={{fontSize:11,color:'#787b86'}}>No news — check back soon.</p>;
+  const tabs=['ALL','HIGH IMPACT','SYMBOL',...Object.keys(CAT_COLORS)].filter(t=>{
+    if(t==='ALL')return true;if(t==='HIGH IMPACT')return hi.length>0;if(t==='SYMBOL')return sym.length>0;
+    return cs[t]?.count>0;
   });
-
-  const displayNews = activeTab==='ALL'        ? allNews
-                    : activeTab==='HIGH IMPACT' ? highImpact
-                    : activeTab==='SYMBOL'      ? symbolNews
-                    : allNews.filter(n=>n.category===activeTab);
-
-  const labelColor = overall.label==='Risk-ON'?'#26a69a':overall.label==='Risk-OFF'?'#ef5350':'#787b86';
-
+  const shown=tab==='ALL'?all:tab==='HIGH IMPACT'?hi:tab==='SYMBOL'?sym:all.filter(n=>n.category===tab);
+  const lc=ov.label==='Risk-ON'?'#26a69a':ov.label==='Risk-OFF'?'#ef5350':'#787b86';
   return(
     <div>
-      {/* Overall sentiment bar */}
       <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 2px 8px',flexWrap:'wrap'}}>
-        <span style={{fontSize:11,fontWeight:700,color:labelColor,
-                      background:labelColor+'18',padding:'3px 10px',borderRadius:12,
-                      border:`1px solid ${labelColor}44`}}>
-          {overall.label==='Risk-ON'?'🟢':overall.label==='Risk-OFF'?'🔴':'⚪'} {overall.label}
+        <span style={{fontSize:11,fontWeight:700,color:lc,background:lc+'18',padding:'3px 10px',borderRadius:12,border:`1px solid ${lc}44`}}>
+          {ov.label==='Risk-ON'?'🟢':ov.label==='Risk-OFF'?'🔴':'⚪'} {ov.label}
         </span>
-        <span style={{fontSize:10,color:'#26a69a'}}>▲ {overall.bullish}</span>
-        <span style={{fontSize:10,color:'#ef5350'}}>▼ {overall.bearish}</span>
-        <span style={{fontSize:10,color:'#787b86'}}>● {overall.neutral}</span>
-        <span style={{fontSize:9,color:'#787b86',marginLeft:'auto'}}>
-          {allNews.length} stories
-        </span>
+        <span style={{fontSize:10,color:'#26a69a'}}>▲ {ov.bullish}</span>
+        <span style={{fontSize:10,color:'#ef5350'}}>▼ {ov.bearish}</span>
+        <span style={{fontSize:10,color:'#787b86'}}>● {ov.neutral}</span>
+        <span style={{fontSize:9,color:'#787b86',marginLeft:'auto'}}>{all.length} stories</span>
       </div>
-
-      {/* Category tabs */}
       <div style={{display:'flex',gap:3,flexWrap:'wrap',padding:'0 0 8px',borderBottom:'1px solid #2a2e39',marginBottom:6}}>
-        {allCats.map(cat=>{
-          const active = activeTab===cat;
-          const cc = cat==='ALL'?'#2962ff':cat==='HIGH IMPACT'?'#f44336':cat==='SYMBOL'?'#ff9800':CAT_COLORS[cat]||'#787b86';
-          return(
-            <button key={cat} onClick={()=>setActiveTab(cat)}
-              style={{fontSize:9,fontWeight:600,padding:'2px 7px',borderRadius:10,border:'none',
-                      cursor:'pointer',
-                      background: active ? cc : cc+'18',
-                      color: active ? '#fff' : cc}}>
-              {cat}
-              {catSummary[cat]&&<span style={{marginLeft:3,opacity:.7}}>({catSummary[cat].count})</span>}
-              {cat==='HIGH IMPACT'&&<span style={{marginLeft:3,opacity:.7}}>({highImpact.length})</span>}
-              {cat==='SYMBOL'&&<span style={{marginLeft:3,opacity:.7}}>({symbolNews.length})</span>}
-            </button>
-          );
+        {tabs.map(t=>{
+          const active=tab===t,cc=t==='ALL'?'#2962ff':t==='HIGH IMPACT'?'#f44336':t==='SYMBOL'?'#ff9800':CAT_COLORS[t]||'#787b86';
+          return(<button key={t} onClick={()=>setTab(t)} style={{fontSize:9,fontWeight:600,padding:'2px 7px',borderRadius:10,border:'none',cursor:'pointer',background:active?cc:cc+'18',color:active?'#fff':cc}}>
+            {t}{t==='HIGH IMPACT'?` (${hi.length})`:t==='SYMBOL'?` (${sym.length})`:cs[t]?` (${cs[t].count})`:''}
+          </button>);
         })}
       </div>
-
-      {/* News list */}
-      {displayNews.length===0
-        ? <p style={{fontSize:11,color:'#787b86',padding:'4px'}}>No news in this category.</p>
-        : displayNews.map((item,i)=><NewsItem key={i} item={item}/>)
-      }
-
-      <p style={{fontSize:9,color:'#787b86',padding:'6px 2px 0'}}>
-        Sources: CNBC · Yahoo Finance · MarketWatch · CoinDesk · Google News · {new Date(newsData.fetched_at).toLocaleTimeString()}
-      </p>
+      {shown.length===0?<p style={{fontSize:11,color:'#787b86'}}>No news in this category.</p>:shown.map((n,i)=><NewsItem key={i} item={n}/>)}
+      <p style={{fontSize:9,color:'#787b86',padding:'6px 2px 0'}}>Sources: CNBC · Yahoo Finance · CoinDesk · Google News · {new Date(nd.fetched_at).toLocaleTimeString()}</p>
     </div>
   );
 }
 
-// ── Main App ─────────────────────────────────────────────────────────────────
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
 const App=()=>{
-  // state
-  const [symbol,setSymbol]         = useState('BTC/USDT');
-  const [timeframe,setTimeframe]   = useState('1h');
-  const [data,setData]             = useState(null);
-  const [setup,setSetup]           = useState(null);
-  const [newsData,setNewsData]     = useState(null);
-  const [livePrice,setLivePrice]   = useState(null);
-  const [loading,setLoading]       = useState(false);
-  const [error,setError]           = useState(null);
-  const [showSearch,setShowSearch] = useState(false);
-  const [query,setQuery]           = useState('');
-  const [searchCat,setSearchCat]   = useState('');      // separate from text query
-  const [futureCount,setFutureCount] = useState('');    // '' = use default from TF
-  const [wsStatus,setWsStatus]     = useState('connecting');
-  const [allMeta,setAllMeta]       = useState([]);
-  const [prevClose,setPrevClose]   = useState(null);
+  const[symbol,setSymbol]=useState('BTC/USDT');
+  const[tf,setTf]=useState('1h');
+  const[candles,setCandles]=useState(null);
+  const[setup,setSetup]=useState(null);
+  const[nd,setNd]=useState(null);
+  const[livePrice,setLivePrice]=useState(null);
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState(null);
+  const[wsStatus,setWsStatus]=useState('connecting');
+  const[showSearch,setShowSearch]=useState(false);
+  const[query,setQuery]=useState('');
+  const[searchCat,setSearchCat]=useState('');
+  const[prevClose,setPrevClose]=useState(null);
+  const[futureCount,setFutureCount]=useState('');
 
-  // chart refs
-  const chartRef       = useRef(null);
-  const chartInst      = useRef(null);
-  const candleSeries   = useRef(null);
-  const volumeSeries   = useRef(null);
-  const wsRef          = useRef(null);
-  const searchInputRef = useRef(null);
+  const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null);
 
-  // ── chart init ──────────────────────────────────────────────────────────
+  // Chart init
   useEffect(()=>{
-    if(!chartRef.current||chartInst.current) return;
-    const chart = LightweightCharts.createChart(chartRef.current,{
-      width:  chartRef.current.clientWidth,
-      height: chartRef.current.clientHeight,
-      layout:{ background:{type:'solid',color:'#131722'}, textColor:'#787b86' },
-      grid:{ vertLines:{color:'#1e222d'}, horzLines:{color:'#1e222d'} },
-      crosshair:{ mode:LightweightCharts.CrosshairMode.Normal },
-      rightPriceScale:{ borderColor:'#2a2e39' },
-      timeScale:{ borderColor:'#2a2e39', timeVisible:true, secondsVisible:false },
+    if(!chartRef.current||chartInst.current)return;
+    const chart=LightweightCharts.createChart(chartRef.current,{
+      width:chartRef.current.clientWidth,height:chartRef.current.clientHeight,
+      layout:{background:{type:'solid',color:'#131722'},textColor:'#787b86'},
+      grid:{vertLines:{color:'#1e222d'},horzLines:{color:'#1e222d'}},
+      crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+      rightPriceScale:{borderColor:'#2a2e39'},
+      timeScale:{borderColor:'#2a2e39',timeVisible:true,secondsVisible:false},
     });
-    chartInst.current = chart;
-
-    candleSeries.current = chart.addCandlestickSeries({
-      upColor:'#26a69a', downColor:'#ef5350',
-      borderUpColor:'#26a69a', borderDownColor:'#ef5350',
-      wickUpColor:'#26a69a',   wickDownColor:'#ef5350',
-    });
-
-    volumeSeries.current = chart.addHistogramSeries({
-      priceFormat:{type:'volume'},
-      priceScaleId:'vol',
-      color:'#26a69a44',
-    });
-    chart.priceScale('vol').applyOptions({ scaleMargins:{top:0.82,bottom:0} });
-
-    const resize=()=>{
-      if(chartInst.current&&chartRef.current)
-        chartInst.current.applyOptions({width:chartRef.current.clientWidth,height:chartRef.current.clientHeight});
-    };
+    chartInst.current=chart;
+    cSeries.current=chart.addCandlestickSeries({upColor:'#26a69a',downColor:'#ef5350',borderUpColor:'#26a69a',borderDownColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350'});
+    vSeries.current=chart.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol'});
+    chart.priceScale('vol').applyOptions({scaleMargins:{top:0.82,bottom:0}});
+    const resize=()=>{if(chartInst.current&&chartRef.current)chartInst.current.applyOptions({width:chartRef.current.clientWidth,height:chartRef.current.clientHeight});};
     window.addEventListener('resize',resize);
-    return()=>{window.removeEventListener('resize',resize);chart.remove();chartInst.current=null};
+    return()=>{window.removeEventListener('resize',resize);chart.remove();chartInst.current=null;};
   },[]);
 
-  // ── render candles when data/news changes ───────────────────────────────
+  // Render candles
   useEffect(()=>{
-    if(!data?.length||!candleSeries.current) return;
-    const dec = smartDec(data[data.length-1]?.close);
-    const minMove = parseFloat((1/Math.pow(10,Math.min(dec,8))).toFixed(Math.min(dec,8)));
-
-    candleSeries.current.applyOptions({
-      priceFormat:{type:'price',precision:Math.min(dec,8),minMove}
-    });
-
-    const hist = data.map(c=>({
-      time:  tsToSec(c.timestamp),
-      open:  +c.open, high:+c.high, low:+c.low, close:+c.close,
-    })).filter(c=>c.open&&c.high&&c.low&&c.close);
-
-    // projected candles — timestamps anchored to last real candle (no gap)
-    const TF_SECS = {'1m':60,'3m':180,'5m':300,'15m':900,'30m':1800,
-      '1h':3600,'2h':7200,'4h':14400,'6h':21600,'8h':28800,'12h':43200,
-      '1d':86400,'3d':259200,'1w':604800};
-    const delta = TF_SECS[timeframe] || 3600;
-    const lastRealTime = hist[hist.length-1]?.time || 0;
-    const maxFuture = futureCount!==''&&!isNaN(parseInt(futureCount))
-      ? Math.max(0,parseInt(futureCount)) : undefined;
-    const future = (setup?.future_candles||[])
-      .slice(0, maxFuture)
-      .map((c,i)=>({
-        time:  lastRealTime + delta * (i + 1),
-        open:  +c.open, high:+c.high, low:+c.low, close:+c.close,
-        color:'rgba(255,200,0,.7)', borderColor:'#FFC800', wickColor:'#FFC800',
-      })).filter(c=>c.open&&c.high&&c.low&&c.close);
-
-    const merged=[...hist,...future].sort((a,b)=>a.time-b.time);
-    candleSeries.current.setData(merged);
+    if(!candles?.length||!cSeries.current)return;
+    const dec=smartDec(candles[candles.length-1]?.close);
+    const mm=parseFloat((1/Math.pow(10,Math.min(dec,8))).toFixed(Math.min(dec,8)));
+    cSeries.current.applyOptions({priceFormat:{type:'price',precision:Math.min(dec,8),minMove:mm}});
+    const hist=candles.map(c=>({time:Math.floor(c.timestamp/1000),open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>c.open&&c.close);
+    const delta=TF_SECS[tf]||3600;
+    const last=hist[hist.length-1]?.time||0;
+    const maxF=futureCount!==''&&!isNaN(+futureCount)?Math.max(0,+futureCount):undefined;
+    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>({time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,color:'rgba(255,200,0,.75)',borderColor:'#FFC800',wickColor:'#FFC800'})).filter(c=>c.open&&c.close);
+    const merged=[...hist,...fut].sort((a,b)=>a.time-b.time);
+    cSeries.current.setData(merged);
     chartInst.current.timeScale().scrollToRealTime();
-
-    // volume
-    const volData = data.map(c=>({
-      time:  tsToSec(c.timestamp),
-      value: +c.volume||0,
-      color: +c.close>=+c.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)',
-    })).filter(c=>c.value>0);
-    volumeSeries.current.setData(volData);
-
-    // markers: BOS, FVG, predicted candle start, news events
+    vSeries.current.setData(candles.map(c=>({time:Math.floor(c.timestamp/1000),value:+c.volume||0,color:+c.close>=+c.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'})).filter(c=>c.value>0));
     const markers=[];
-    data.forEach(c=>{
-      const t=tsToSec(c.timestamp);
-      if(c.bullish_break) markers.push({time:t,position:'belowBar',color:'#26a69a',shape:'arrowUp',  text:'BOS↑'});
-      if(c.bearish_break) markers.push({time:t,position:'aboveBar',color:'#ef5350',shape:'arrowDown',text:'BOS↓'});
-      if(c.bullish_fvg)   markers.push({time:t,position:'belowBar',color:'#2962ff',shape:'circle',   text:'FVG↑'});
-      if(c.bearish_fvg)   markers.push({time:t,position:'aboveBar',color:'#ef5350',shape:'circle',   text:'FVG↓'});
+    candles.forEach(c=>{
+      const t=Math.floor(c.timestamp/1000);
+      if(c.bullish_fvg||setup?.fvg?.find?.(f=>f.type==='bull'&&Math.floor(candles[f.idx]?.timestamp/1000)===t)) markers.push({time:t,position:'belowBar',color:'#2962ff',shape:'circle',text:'FVG↑'});
+      if(c.bearish_fvg||setup?.fvg?.find?.(f=>f.type==='bear'&&Math.floor(candles[f.idx]?.timestamp/1000)===t)) markers.push({time:t,position:'aboveBar',color:'#ef5350',shape:'circle',text:'FVG↓'});
     });
-    if(future.length>0)
-      markers.push({time:future[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'Predicted'});
-
-    // News event markers (snap to nearest available candle time)
-    const newsList = newsData?.news || [];
-    if(newsList.length>0){
-      const chartTimes = new Set(merged.map(c=>c.time));
-      newsList.forEach(n=>{
-        if(!n.timestamp) return;
-        const nt = Math.floor(new Date(n.timestamp).getTime()/1000);
-        // Find closest chart bar within ±2 candles
-        let closest = null, minDiff = Infinity;
-        for(const t of chartTimes){
-          const diff = Math.abs(t - nt);
-          if(diff < minDiff && diff <= delta * 2){ minDiff=diff; closest=t; }
-        }
-        if(closest!=null){
-          markers.push({
-            time:     closest,
-            position: n.sentiment==='bullish'?'belowBar':'aboveBar',
-            color:    n.sentiment==='bullish'?'#26a69a':n.sentiment==='bearish'?'#ef5350':'#787b86',
-            shape:    'square',
-            text:     n.category==='macro'?'📰M':'📰',
-          });
-        }
-      });
-    }
-
-    // Sort markers by time (required by LightweightCharts)
+    setup?.bos?.forEach(b=>{
+      const t=Math.floor(candles[b.idx]?.timestamp/1000)||0;
+      if(t) markers.push({time:t,position:b.type==='bull'?'belowBar':'aboveBar',color:b.type==='bull'?'#26a69a':'#ef5350',shape:'arrowUp',text:b.type==='bull'?'BOS↑':'BOS↓'});
+    });
+    if(fut.length) markers.push({time:fut[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'Predicted'});
+    (nd?.news||[]).forEach(n=>{
+      if(!n.timestamp)return;
+      const nt=Math.floor(new Date(n.timestamp).getTime()/1000);
+      let closest=null,minD=Infinity;
+      for(const c of merged){const d=Math.abs(c.time-nt);if(d<minD&&d<=delta*2){minD=d;closest=c.time;}}
+      if(closest) markers.push({time:closest,position:n.sentiment==='bullish'?'belowBar':'aboveBar',color:n.sentiment==='bullish'?'#26a69a':n.sentiment==='bearish'?'#ef5350':'#787b86',shape:'square',text:'📰'});
+    });
     markers.sort((a,b)=>a.time-b.time);
-    candleSeries.current.setMarkers(markers);
+    cSeries.current.setMarkers(markers);
+    if(hist.length) setPrevClose(hist[hist.length-1].close);
+  },[candles,setup,nd,futureCount]);
 
-    if(hist.length>0) setPrevClose(hist[hist.length-1].close);
-  },[data,setup,newsData,futureCount]);
-
-  // ── WebSocket real-time ─────────────────────────────────────────────────
+  // WebSocket (Binance direct for crypto; poll REST for stocks)
   useEffect(()=>{
-    if(wsRef.current){ wsRef.current.close(); wsRef.current=null; }
+    if(wsRef.current){try{wsRef.current.close();}catch(_){}wsRef.current=null;}
     setWsStatus('connecting');
-
-    let dead = false;
-    const connect = ()=>{
-      if(dead) return;
-      const enc = encodeURIComponent(symbol);
-      const ws  = new WebSocket(`${WS}/ws/${enc}?timeframe=${timeframe}`);
-      wsRef.current = ws;
-
-      ws.onopen  = ()=>setWsStatus('live');
-      ws.onclose = ()=>{ setWsStatus('reconnecting'); if(!dead) setTimeout(connect,3000); };
-      ws.onerror = ()=>{ setWsStatus('error'); };
-
-      ws.onmessage=(e)=>{
+    if(!isCrypto(symbol)){setWsStatus('delayed');return;}
+    let dead=false;
+    const connect=()=>{
+      if(dead)return;
+      const sym=symbol.replace('/','').toLowerCase();
+      const ws=new WebSocket(`${BINANCE_WS}/${sym}@kline_${tf}`);
+      wsRef.current=ws;
+      ws.onopen=()=>setWsStatus('live');
+      ws.onclose=()=>{setWsStatus('reconnecting');if(!dead)setTimeout(connect,3000);};
+      ws.onerror=()=>setWsStatus('error');
+      ws.onmessage=e=>{
         try{
-          const msg=JSON.parse(e.data);
-          if(msg.type==='price_update'){
-            setLivePrice(msg.price);
-            const t=Math.floor((msg.timestamp||0)/1000);
-            if(t>0&&candleSeries.current){
-              candleSeries.current.update({time:t,open:msg.open,high:msg.high,low:msg.low,close:msg.close});
-              volumeSeries.current?.update({time:t,value:msg.volume||0,
-                color:msg.close>=msg.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'});
-            }
+          const k=JSON.parse(e.data).k;
+          if(!k)return;
+          setLivePrice(+k.c);
+          const t=Math.floor(+k.t/1000);
+          if(t>0&&cSeries.current){
+            cSeries.current.update({time:t,open:+k.o,high:+k.h,low:+k.l,close:+k.c});
+            vSeries.current?.update({time:t,value:+k.v||0,color:+k.c>=+k.o?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'});
           }
         }catch(_){}
       };
     };
     connect();
-    return()=>{ dead=true; try{ wsRef.current?.close(); }catch(_){} };
-  },[symbol,timeframe]);
+    return()=>{dead=true;try{wsRef.current?.close();}catch(_){}};
+  },[symbol,tf]);
 
-  // ── fetch REST data ─────────────────────────────────────────────────────
-  const fetchAll = useCallback(async(sym,tf,quiet=false)=>{
-    if(!quiet) setLoading(true);
+  // Fetch candles + setup
+  const load=useCallback(async(sym,t,quiet=false)=>{
+    if(!quiet)setLoading(true);
+    setError(null);
     try{
-      const [dRes,sRes]=await Promise.all([
-        fetch(`${API}/api/market/data?symbol=${encodeURIComponent(sym)}&timeframe=${tf}&limit=1000`),
-        fetch(`${API}/api/analysis/trade-setup?symbol=${encodeURIComponent(sym)}&timeframe=${tf}`),
-      ]);
-      if(!dRes.ok) throw new Error((await dRes.json().catch(()=>({}))).detail||`HTTP ${dRes.status}`);
-      if(!sRes.ok) throw new Error((await sRes.json().catch(()=>({}))).detail||`HTTP ${sRes.status}`);
-      const [dj,sj]=await Promise.all([dRes.json(),sRes.json()]);
-      setData(dj.data);
-      setSetup(sj.setup);
-      setError(null);
-      // Fetch news separately (non-blocking — don't fail on news error)
-      fetch(`${API}/api/news?symbol=${encodeURIComponent(sym)}`)
-        .then(r=>r.ok?r.json():null)
-        .then(j=>{ if(j) setNewsData(j); })
-        .catch(()=>{});
-    }catch(err){
-      setError(err.message);
-    }finally{
-      if(!quiet) setLoading(false);
-    }
+      const data=await fetchCandles(sym,t,600);
+      setCandles(data);
+      setLivePrice(data[data.length-1]?.close||null);
+      const s=generateSetup(data,data[data.length-1]?.close);
+      setSetup(s);
+    }catch(e){setError(e.message);}
+    finally{if(!quiet)setLoading(false);}
   },[]);
 
-  // ── symbols meta for search ─────────────────────────────────────────────
+  // Initial load + 30s refresh
   useEffect(()=>{
-    fetch(`${API}/api/market/symbols`)
-      .then(r=>r.json())
-      .then(j=>setAllMeta(j.meta||[]))
-      .catch(()=>{});
-  },[]);
-
-  // ── initial load + 30s data refresh ────────────────────────────────────
-  useEffect(()=>{
-    fetchAll(symbol,timeframe);
-    const id=setInterval(()=>fetchAll(symbol,timeframe,true),30000);
+    load(symbol,tf);
+    const id=setInterval(()=>load(symbol,tf,true),30000);
     return()=>clearInterval(id);
-  },[symbol,timeframe]);
+  },[symbol,tf]);
 
-  // ── 60s news-only refresh (near real-time headlines) ────────────────────
+  // News fetch + 60s refresh
   useEffect(()=>{
-    const pollNews=()=>{
-      fetch(`${API}/api/news?symbol=${encodeURIComponent(symbol)}`)
-        .then(r=>r.ok?r.json():null)
-        .then(j=>{ if(j) setNewsData(j); })
-        .catch(()=>{});
-    };
-    const nid=setInterval(pollNews,60000);
-    return()=>clearInterval(nid);
+    fetchNews(symbol).then(setNd).catch(()=>{});
+    const id=setInterval(()=>fetchNews(symbol).then(setNd).catch(()=>{}),60000);
+    return()=>clearInterval(id);
   },[symbol]);
 
-  // ── search focus ────────────────────────────────────────────────────────
-  useEffect(()=>{ if(showSearch) setTimeout(()=>searchInputRef.current?.focus(),50); },[showSearch]);
+  // Search focus
+  useEffect(()=>{if(showSearch)setTimeout(()=>searchRef.current?.focus(),50);},[showSearch]);
 
-  // ── search filter (type-category + text query are independent) ──────────
-  const filtered = useMemo(()=>{
+  const filtered=useMemo(()=>{
     const q=(query||'').toUpperCase().trim();
-    let pool = searchCat
-      ? allMeta.filter(s=>s.type===searchCat)
-      : allMeta;
-    if(!q) return pool.slice(0,100);
-    return pool.filter(s=>
-      s.symbol.toUpperCase().includes(q)||s.name?.toUpperCase().includes(q)
-    ).slice(0,100);
-  },[query,searchCat,allMeta]);
+    let pool=searchCat?ALL_SYMBOLS.filter(s=>s.type===searchCat):ALL_SYMBOLS;
+    if(!q)return pool.slice(0,120);
+    return pool.filter(s=>s.symbol.toUpperCase().includes(q)||s.name?.toUpperCase().includes(q)).slice(0,120);
+  },[query,searchCat]);
 
-  const selectSym=(sym)=>{
-    setShowSearch(false);setQuery('');setSearchCat('');
-    setSymbol(sym);
-  };
-  const changeTimeframe=(tf)=>{ setTimeframe(tf); fetchAll(symbol,tf); };
+  const selectSym=s=>{setShowSearch(false);setQuery('');setSearchCat('');setSymbol(s);};
+  const changeTf=t=>{setTf(t);load(symbol,t);};
+  const price=livePrice??candles?.[candles.length-1]?.close??null;
+  const dec=smartDec(price??0);
+  const chg=price&&prevClose?price-prevClose:null;
+  const chgPct=chg&&prevClose?chg/prevClose*100:null;
+  const chgPos=chg!=null?chg>=0:null;
+  const overall=nd?.overall_sentiment||{};
+  const macroLbl=overall.label||'';
+  const macroC=macroLbl==='Risk-ON'?'#26a69a':macroLbl==='Risk-OFF'?'#ef5350':'#787b86';
+  const hiCount=(nd?.high_impact||[]).length;
 
-  // ── derived values ──────────────────────────────────────────────────────
-  const price    = livePrice ?? setup?.current_price ?? null;
-  const dec      = setup?.decimals ?? smartDec(price??0);
-  const mtf      = setup?.mtf_prediction;
-  const chg      = price && prevClose ? price - prevClose : null;
-  const chgPct   = chg && prevClose ? (chg/prevClose*100) : null;
-  const chgPos   = chg != null ? chg >= 0 : null;
-
-  // Macro sentiment from news
-  const overall    = newsData?.overall_sentiment || {};
-  const macroLabel = overall.label || (newsData ? 'Neutral' : '');
-  const macroColor = macroLabel==='Risk-ON'?'#26a69a':macroLabel==='Risk-OFF'?'#ef5350':'#787b86';
-  const highImpactCount = (newsData?.high_impact||[]).length;
-
-  // ── render ──────────────────────────────────────────────────────────────
   return(
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'#131722'}}>
-
-      {/* ── HEADER ── */}
-      <header style={{height:46,display:'flex',alignItems:'center',gap:8,padding:'0 12px',
-                      borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0}}>
-        {/* Logo */}
-        <span style={{color:'#2962ff',fontWeight:700,fontSize:14,marginRight:4}}>⚡ SMC</span>
-
-        {/* Symbol button */}
-        <button onClick={()=>setShowSearch(true)}
-          style={{display:'flex',alignItems:'center',gap:6,background:'#131722',
-                  border:'1px solid #2a2e39',borderRadius:4,padding:'4px 10px',
-                  color:'#d1d4dc',cursor:'pointer',fontSize:13,fontWeight:600}}>
-          {symbol}
-          <span style={{fontSize:9,color:'#787b86'}}>▼</span>
+      {/* HEADER */}
+      <header style={{height:46,display:'flex',alignItems:'center',gap:8,padding:'0 12px',borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0,flexWrap:'nowrap',overflow:'hidden'}}>
+        <span style={{color:'#2962ff',fontWeight:700,fontSize:14,flexShrink:0}}>⚡ SMC</span>
+        <button onClick={()=>setShowSearch(true)} style={{display:'flex',alignItems:'center',gap:6,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'4px 10px',color:'#d1d4dc',cursor:'pointer',fontSize:13,fontWeight:600,flexShrink:0}}>
+          {symbol}<span style={{fontSize:9,color:'#787b86'}}>▼</span>
         </button>
-
-        {/* Live price */}
-        {price!=null&&(
-          <span style={{fontSize:14,fontWeight:700,color:chgPos===false?'#ef5350':chgPos?'#26a69a':'#d1d4dc'}}>
-            {fmtPrice(price,dec)}
-          </span>
-        )}
-        {chgPct!=null&&(
-          <span style={{fontSize:11,color:chgPos?'#26a69a':'#ef5350'}}>
-            {chgPos?'+':''}{chgPct.toFixed(2)}%
-          </span>
-        )}
-
-        {/* Macro pulse */}
-        {macroLabel&&(
-          <span style={{fontSize:10,color:macroColor,background:macroColor+'18',
-                        padding:'2px 7px',borderRadius:10,border:`1px solid ${macroColor}44`,cursor:'pointer'}}>
-            📰 {macroLabel}{highImpactCount>0?` · 🔴${highImpactCount}`:''}
-          </span>
-        )}
-
+        {price!=null&&<span style={{fontSize:14,fontWeight:700,color:chgPos===false?'#ef5350':chgPos?'#26a69a':'#d1d4dc',flexShrink:0}}>{fmt(price,dec)}</span>}
+        {chgPct!=null&&<span style={{fontSize:11,color:chgPos?'#26a69a':'#ef5350',flexShrink:0}}>{chgPos?'+':''}{chgPct.toFixed(2)}%</span>}
+        {macroLbl&&<span style={{fontSize:10,color:macroC,background:macroC+'18',padding:'2px 7px',borderRadius:10,border:`1px solid ${macroC}44`,flexShrink:0}}>📰 {macroLbl}{hiCount>0?` · 🔴${hiCount}`:''}</span>}
         <div style={{flex:1}}/>
-
-        {/* Future candle count input */}
-        <div style={{display:'flex',alignItems:'center',gap:4,background:'#131722',
-                     border:'1px solid #2a2e39',borderRadius:4,padding:'2px 6px'}}>
-          <span style={{fontSize:10,color:'#787b86',whiteSpace:'nowrap'}}>🕯 Candles:</span>
-          <input
-            type="number" min="0" max="200"
-            value={futureCount}
-            onChange={e=>setFutureCount(e.target.value)}
-            placeholder="auto"
-            style={{width:46,background:'transparent',border:'none',outline:'none',
-                    color:'#FFC800',fontSize:11,fontWeight:600,textAlign:'center'}}
-          />
+        <div style={{display:'flex',alignItems:'center',gap:4,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'2px 6px',flexShrink:0}}>
+          <span style={{fontSize:10,color:'#787b86',whiteSpace:'nowrap'}}>🕯</span>
+          <input type="number" min="0" max="200" value={futureCount} onChange={e=>setFutureCount(e.target.value)} placeholder="auto"
+            style={{width:40,background:'transparent',border:'none',outline:'none',color:'#FFC800',fontSize:11,fontWeight:600,textAlign:'center'}}/>
         </div>
-
-        {/* Timeframes */}
-        <div style={{display:'flex',gap:2,background:'#131722',border:'1px solid #2a2e39',
-                     borderRadius:4,padding:2}}>
-          {TIMEFRAMES.map(tf=>(
-            <button key={tf} onClick={()=>changeTimeframe(tf)}
-              style={{padding:'3px 8px',borderRadius:3,border:'none',cursor:'pointer',
-                      fontSize:11,fontWeight:500,
-                      background:timeframe===tf?'#2962ff':'transparent',
-                      color:timeframe===tf?'#fff':'#787b86'}}>
-              {tf}
-            </button>
+        <div style={{display:'flex',gap:2,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:2,flexShrink:0}}>
+          {TIMEFRAMES.map(t=>(
+            <button key={t} onClick={()=>changeTf(t)} style={{padding:'3px 8px',borderRadius:3,border:'none',cursor:'pointer',fontSize:11,fontWeight:500,background:tf===t?'#2962ff':'transparent',color:tf===t?'#fff':'#787b86'}}>{t}</button>
           ))}
         </div>
-
-        {/* Status dot */}
-        <div style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'#787b86'}}>
-          <div style={{width:6,height:6,borderRadius:'50%',
-                       background:error?'#ef5350':
-                                  wsStatus==='live'?'#26a69a':
-                                  wsStatus==='reconnecting'?'#ff9800':'#787b86'}}/>
-          {error?'Error':wsStatus==='live'?'Live':wsStatus==='reconnecting'?'Reconnecting…':'Connecting…'}
+        <div style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'#787b86',flexShrink:0}}>
+          <div style={{width:6,height:6,borderRadius:'50%',background:error?'#ef5350':wsStatus==='live'?'#26a69a':wsStatus==='delayed'?'#ff9800':'#787b86'}}/>
+          {error?'Error':wsStatus==='live'?'Live':wsStatus==='delayed'?'Delayed':'…'}
         </div>
       </header>
 
-      {/* ── MAIN WORKSPACE ── */}
+      {/* WORKSPACE */}
       <div style={{flex:1,display:'flex',overflow:'hidden'}}>
-
         {/* Chart */}
         <div style={{flex:1,position:'relative'}}>
-          {loading&&(
-            <div style={{position:'absolute',inset:0,background:'rgba(19,23,34,.8)',
-                         zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',
-                         flexDirection:'column',gap:12}}>
-              <div style={{width:32,height:32,border:'3px solid #2962ff',
-                           borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
-              <span style={{color:'#787b86',fontSize:12}}>Loading {symbol} {timeframe}…</span>
-            </div>
-          )}
+          {loading&&<div style={{position:'absolute',inset:0,background:'rgba(19,23,34,.8)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
+            <div style={{width:32,height:32,border:'3px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>
+            <span style={{color:'#787b86',fontSize:12}}>Loading {symbol} {tf}…</span>
+          </div>}
           <div ref={chartRef} style={{width:'100%',height:'100%'}}/>
         </div>
 
-        {/* ── ANALYSIS PANEL ── */}
-        <div style={{width:340,borderLeft:'1px solid #2a2e39',background:'#1e222d',
-                     overflowY:'auto',flexShrink:0,padding:'8px 6px'}}>
-
-          {/* Error */}
-          {error&&(
-            <div style={{background:'#ef535015',border:'1px solid #ef535040',
-                         borderRadius:6,padding:'8px 12px',marginBottom:8,fontSize:11}}>
-              <span style={{color:'#ef5350'}}>⚠ {error}</span>
-            </div>
-          )}
-
+        {/* PANEL */}
+        <div style={{width:340,borderLeft:'1px solid #2a2e39',background:'#1e222d',overflowY:'auto',flexShrink:0,padding:'8px 6px'}}>
+          {error&&<div style={{background:'#ef535015',border:'1px solid #ef535040',borderRadius:6,padding:'8px 12px',marginBottom:8,fontSize:11,color:'#ef5350'}}>⚠ {error}</div>}
           {!setup?(
-            <div style={{height:'100%',display:'flex',alignItems:'center',
-                         justifyContent:'center',color:'#787b86',fontSize:12,textAlign:'center',padding:24}}>
-              Select a symbol and click a timeframe to load analysis.
+            <div style={{height:'100%',display:'flex',alignItems:'center',justifyContent:'center',color:'#787b86',fontSize:12,textAlign:'center',padding:24}}>
+              {loading?'Analyzing…':'Select a symbol to start.'}
             </div>
           ):(
             <>
-              {/* Signal badge */}
-              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
-                           padding:'6px 8px 10px'}}>
-                <div>
-                  <p style={{fontSize:11,color:'#787b86'}}>Trade Signal</p>
-                  <p style={{fontSize:13,fontWeight:700,color:'#d1d4dc',marginTop:2}}>{symbol} · {timeframe}</p>
-                </div>
-                <span className={setup.signal==='LONG'?'pulse-bull':'pulse-bear'}
-                  style={{padding:'4px 14px',borderRadius:20,fontSize:12,fontWeight:700,
-                          background:setup.signal==='LONG'?'#26a69a22':'#ef535022',
-                          color:setup.signal==='LONG'?'#26a69a':'#ef5350',
-                          border:`1px solid ${setup.signal==='LONG'?'#26a69a55':'#ef535055'}`}}>
-                  {setup.signal}
-                </span>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 8px 10px'}}>
+                <div><p style={{fontSize:11,color:'#787b86'}}>Trade Signal</p><p style={{fontSize:13,fontWeight:700,color:'#d1d4dc',marginTop:2}}>{symbol} · {tf}</p></div>
+                <span className={setup.signal==='LONG'?'pulse-bull':'pulse-bear'} style={{padding:'4px 14px',borderRadius:20,fontSize:12,fontWeight:700,background:setup.signal==='LONG'?'#26a69a22':'#ef535022',color:setup.signal==='LONG'?'#26a69a':'#ef5350',border:`1px solid ${setup.signal==='LONG'?'#26a69a55':'#ef535055'}`}}>{setup.signal}</span>
               </div>
 
-              {/* ── STEP 1-3: HTF Bias ── */}
               <Section title="HTF Bias & Structure" icon="📊">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                  <Tile label="HTF Bias"   value={mtf?.htf_bias}   color={clsDir(mtf?.htf_bias)}/>
-                  <Tile label="Phase"      value={mtf?.phase}/>
-                  <Tile label="Confidence" value={mtf?.confidence}
-                    color={mtf?.confidence==='High'?'text-bull':mtf?.confidence==='Medium'?'text-yellow-400':'text-bear'}/>
-                  <Tile label="Condition"  value={mtf?.condition}/>
+                  <Tile label="HTF Bias" value={setup.htf_bias} color={clsDir(setup.htf_bias)}/>
+                  <Tile label="Phase" value={setup.phase}/>
+                  <Tile label="Confidence" value={setup.confidence} color={setup.confidence==='High'?'text-bull':setup.confidence==='Medium'?'text-yellow-400':'text-bear'}/>
+                  <Tile label="RSI (14)" value={setup.rsi} color={+setup.rsi>70?'text-bear':+setup.rsi<30?'text-bull':'text-white'}/>
                 </div>
-                {/* Bias bar */}
-                <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 4px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px'}}>
                   <span style={{fontSize:10,color:'#787b86',minWidth:28}}>Bull</span>
                   <div style={{flex:1,height:5,background:'#2a2e39',borderRadius:3,overflow:'hidden'}}>
-                    <div style={{height:'100%',borderRadius:3,
-                                 background:'linear-gradient(90deg,#26a69a,#2962ff)',
-                                 width:`${mtf?.bullish_score_pct||50}%`}}/>
+                    <div style={{height:'100%',borderRadius:3,background:'linear-gradient(90deg,#26a69a,#2962ff)',width:`${setup.bull_pct||50}%`}}/>
                   </div>
                   <span style={{fontSize:10,color:'#787b86',minWidth:28,textAlign:'right'}}>Bear</span>
                 </div>
-                <p style={{fontSize:10,color:'#787b86',padding:'4px 4px 0'}}>
-                  {mtf?.bullish_score_pct}% bull · {mtf?.bearish_score_pct}% bear
-                </p>
-                {/* MTF Consistency */}
-                {mtf?.mtf_consistency&&(
-                  <div style={{marginTop:6,padding:'5px 8px',borderRadius:5,
-                               background: mtf.mtf_consistency==='ALIGNED'?'#26a69a11':'#ff980011',
-                               border:`1px solid ${mtf.mtf_consistency==='ALIGNED'?'#26a69a33':'#ff980033'}`}}>
-                    <span style={{fontSize:10,fontWeight:600,
-                      color:mtf.mtf_consistency==='ALIGNED'?'#26a69a':'#ff9800'}}>
-                      TF Consistency: {mtf.mtf_consistency}
-                    </span>
-                  </div>
-                )}
+                <p style={{fontSize:10,color:'#787b86',padding:'4px 4px 0'}}>{setup.bull_pct}% bull · {setup.bear_pct}% bear</p>
               </Section>
 
-              {/* ── STEP 4: Next Candle ── */}
               <Section title="Next Candle Prediction" icon="🕯">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                  <Tile label={`${timeframe} Type`}      value={mtf?.next_candle_type}/>
-                  <Tile label={`${timeframe} Direction`} value={mtf?.next_candle_direction}
-                    color={clsDir(mtf?.next_candle_direction)}/>
-                  <Tile label="Body Size"  value={mtf?.next_candle_body}/>
-                  <Tile label="Alignment"  value={mtf?.alignment}
-                    color={mtf?.alignment==='YES'?'text-bull':'text-bear'}/>
+                  <Tile label={`${tf} Type`} value={setup.next_type}/>
+                  <Tile label={`${tf} Direction`} value={setup.next_dir} color={clsDir(setup.next_dir)}/>
+                  <Tile label="Body Size" value={setup.next_size}/>
+                  <Tile label="Confidence" value={setup.confidence}/>
                 </div>
-                <p style={{fontSize:10,color:'#787b86',padding:'0 4px'}}>Wicks: {mtf?.next_candle_wicks}</p>
-                {mtf?.alignment==='NO'&&(
-                  <p style={{fontSize:10,color:'#ef5350',padding:'4px 4px 0'}}>⚠ {mtf?.alignment_note}</p>
-                )}
-                {/* 1H candle */}
-                {mtf?.nc_1h&&(
-                  <div style={{marginTop:6,padding:'6px 8px',background:'#131722',borderRadius:6}}>
-                    <p style={{fontSize:10,color:'#787b86',marginBottom:4}}>1H Candle</p>
-                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-                      <span style={{fontSize:11,color:'#d1d4dc'}}>{mtf.nc_1h.type}</span>
-                      <span style={{fontSize:10,fontWeight:600,
-                                    color:mtf.nc_1h.direction==='Bullish'?'#26a69a':'#ef5350'}}>
-                        {mtf.nc_1h.direction} · {mtf.nc_1h.body}
-                      </span>
-                    </div>
-                  </div>
-                )}
               </Section>
 
-              {/* ── STEP 5: Trade Setup ── */}
               <Section title="Trade Setup" icon="🎯">
-                <div style={{padding:'4px 8px 8px',background:'#131722',borderRadius:6,marginBottom:6,
-                             borderLeft:`3px solid ${setup.signal==='LONG'?'#26a69a':'#ef5350'}`}}>
+                <div style={{padding:'4px 8px 8px',background:'#131722',borderRadius:6,marginBottom:6,borderLeft:`3px solid ${setup.signal==='LONG'?'#26a69a':'#ef5350'}`}}>
                   <p style={{fontSize:10,color:'#787b86',marginBottom:4}}>Entry Zone</p>
-                  <p style={{fontSize:14,fontWeight:700,fontFamily:'monospace',color:'#d1d4dc'}}>
-                    {fmtPrice(setup.entry_zone?.[0],dec)} – {fmtPrice(setup.entry_zone?.[1],dec)}
-                  </p>
+                  <p style={{fontSize:14,fontWeight:700,fontFamily:'monospace',color:'#d1d4dc'}}>{fmt(setup.entry_zone?.[0],dec)} – {fmt(setup.entry_zone?.[1],dec)}</p>
                 </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:4}}>
-                  <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',
-                               border:'1px solid #26a69a33'}}>
+                  <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #26a69a33'}}>
                     <p style={{fontSize:10,color:'#26a69a',fontWeight:600}}>TP 1</p>
-                    <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>
-                      {fmtPrice(setup.take_profit_1,dec)}
-                    </p>
-                    <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr_ratio_tp1} R:R</p>
+                    <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.take_profit_1,dec)}</p>
+                    <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr1} R:R</p>
                   </div>
-                  <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',
-                               border:'1px solid #2962ff33'}}>
+                  <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #2962ff33'}}>
                     <p style={{fontSize:10,color:'#2962ff',fontWeight:600}}>TP 2</p>
-                    <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>
-                      {fmtPrice(setup.take_profit_2,dec)}
-                    </p>
-                    <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr_ratio_tp2} R:R</p>
+                    <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.take_profit_2,dec)}</p>
+                    <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr2} R:R</p>
                   </div>
                 </div>
-                <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',
-                             border:'1px solid #ef535033',marginBottom:4}}>
+                <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #ef535033',marginBottom:4}}>
                   <p style={{fontSize:10,color:'#ef5350',fontWeight:600}}>Stop Loss</p>
-                  <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>
-                    {fmtPrice(setup.stop_loss,dec)}
-                  </p>
+                  <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.stop_loss,dec)}</p>
                 </div>
-                <div style={{display:'flex',justifyContent:'space-between',
-                             padding:'6px 8px',background:'#131722',borderRadius:6,marginBottom:4}}>
-                  <span style={{fontSize:11,color:'#787b86'}}>Leverage</span>
-                  <span style={{fontSize:11,fontWeight:700,color:'#2962ff'}}>{setup.leverage_suggested}x</span>
+                <div style={{display:'flex',justifyContent:'space-between',padding:'6px 8px',background:'#131722',borderRadius:6}}>
+                  <span style={{fontSize:11,color:'#787b86'}}>Suggested Leverage</span>
+                  <span style={{fontSize:11,fontWeight:700,color:'#2962ff'}}>{setup.leverage}x</span>
                 </div>
-                {setup.pattern&&(
-                  <div style={{padding:'6px 8px',background:'#2962ff11',borderRadius:6,
-                               border:'1px solid #2962ff22',textAlign:'center'}}>
-                    <p style={{fontSize:10,color:'#2962ff',fontWeight:600,marginBottom:2}}>
-                      Pattern {setup.pattern_confidence?`(${setup.pattern_confidence})`:''}
-                    </p>
-                    <p style={{fontSize:11,color:'#d1d4dc'}}>{setup.pattern}</p>
-                    {setup.pattern_bias&&(
-                      <p style={{fontSize:10,marginTop:2,
-                        color:setup.pattern_bias==='Bullish'?'#26a69a':setup.pattern_bias==='Bearish'?'#ef5350':'#787b86'}}>
-                        Bias: {setup.pattern_bias}
-                      </p>
-                    )}
-                  </div>
-                )}
-                {setup.setup_invalidation&&(
-                  <p style={{fontSize:10,color:'#787b86',padding:'6px 4px 0'}}>
-                    ⚠ Invalidated: {setup.setup_invalidation}
-                  </p>
-                )}
               </Section>
 
-              {/* ── Key Levels ── */}
               <Section title="Key Levels" icon="📍" open={false}>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
                   <div>
                     <p style={{fontSize:10,color:'#26a69a',fontWeight:600,padding:'4px 8px'}}>BSL (Stop Hunt↑)</p>
-                    {(mtf?.bsl||[]).length>0
-                      ? mtf.bsl.map((l,i)=>(
-                          <p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>
-                            {fmtPrice(l,dec)}
-                          </p>))
-                      : <p style={{fontSize:10,color:'#787b86',padding:'2px 8px'}}>None detected</p>
-                    }
+                    {setup.bsl.map((l,i)=><p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>{fmt(l,dec)}</p>)}
                   </div>
                   <div>
                     <p style={{fontSize:10,color:'#ef5350',fontWeight:600,padding:'4px 8px'}}>SSL (Stop Hunt↓)</p>
-                    {(mtf?.ssl||[]).length>0
-                      ? mtf.ssl.map((l,i)=>(
-                          <p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>
-                            {fmtPrice(l,dec)}
-                          </p>))
-                      : <p style={{fontSize:10,color:'#787b86',padding:'2px 8px'}}>None detected</p>
-                    }
+                    {setup.ssl.map((l,i)=><p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>{fmt(l,dec)}</p>)}
                   </div>
                 </div>
-                {/* Per-TF key levels */}
-                {(mtf?.tf_analyses||[]).filter(a=>!a.error).map(a=>(
-                  <div key={a.tf} style={{marginTop:6,padding:'6px 8px',background:'#131722',borderRadius:6}}>
-                    <p style={{fontSize:10,fontWeight:600,color:'#787b86',marginBottom:4}}>{a.tf.toUpperCase()}</p>
-                    <div style={{display:'flex',justifyContent:'space-between',fontSize:10,flexWrap:'wrap',gap:4}}>
-                      <span style={{color:'#ef5350'}}>R: {fmtPrice(a.resistance,dec)}</span>
-                      <span style={{color:'#26a69a'}}>S: {fmtPrice(a.support,dec)}</span>
-                      {a.bullish_ob_level&&<span style={{color:'#2962ff'}}>OB↑: {fmtPrice(a.bullish_ob_level,dec)}</span>}
-                    </div>
+                <div style={{marginTop:8,padding:'6px 8px',background:'#131722',borderRadius:6}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4}}>
+                    <span style={{color:'#787b86'}}>EMA 9</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema9,dec)}</span>
                   </div>
-                ))}
-              </Section>
-
-              {/* ── Liquidation Heatmap ── */}
-              <Section title="Liquidation Heatmap" icon="🔥" open={false}>
-                {(setup.liquidation_zones||[]).map((z,i)=>(
-                  <div key={i} style={{display:'flex',justifyContent:'space-between',
-                                       padding:'5px 8px',borderBottom:'1px solid #2a2e39',fontSize:11}}>
-                    <span style={{color:'#787b86',minWidth:70}}>{z.leverage}x</span>
-                    <span style={{color:'#ef5350',fontFamily:'monospace'}}>
-                      ↑ {fmtPrice(z.short_liquidation,dec)}
-                    </span>
-                    <span style={{color:'#26a69a',fontFamily:'monospace'}}>
-                      ↓ {fmtPrice(z.long_liquidation,dec)}
-                    </span>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4}}>
+                    <span style={{color:'#787b86'}}>EMA 21</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema21,dec)}</span>
                   </div>
-                ))}
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:10}}>
+                    <span style={{color:'#787b86'}}>EMA 50</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema50,dec)}</span>
+                  </div>
+                </div>
               </Section>
 
-              {/* ── NEWS & MACRO IMPACT ── */}
-              <Section title={`News & Macro Impact${highImpactCount>0?` 🔴${highImpactCount}`:''}`} icon="📰" open={true}>
-                <NewsPanel newsData={newsData}/>
+              <Section title={`News & Macro Impact${hiCount>0?` 🔴${hiCount}`:''}`} icon="📰" open={true}>
+                <NewsPanel nd={nd}/>
               </Section>
 
-              {/* ── STEP 6: Summary Table ── */}
               <Section title="Analysis Summary" icon="📋">
-                <table className="sum-table">
-                  <tbody>
-                    <tr><td>Asset</td><td>{symbol}</td></tr>
-                    <tr><td>HTF Bias</td>
-                        <td style={{color:mtf?.htf_bias==='Bullish'?'#26a69a':
-                                         mtf?.htf_bias==='Bearish'?'#ef5350':'#d1d4dc'}}>
-                          {mtf?.htf_bias}
-                        </td></tr>
-                    <tr><td>TF Consistency</td>
-                        <td style={{color:mtf?.mtf_consistency==='ALIGNED'?'#26a69a':'#ff9800',fontSize:10}}>
-                          {mtf?.mtf_consistency||'—'}
-                        </td></tr>
-                    <tr><td>Structure</td><td>{mtf?.condition}</td></tr>
-                    <tr><td>Phase</td><td>{mtf?.phase}</td></tr>
-                    <tr><td>{timeframe} Candle</td>
-                        <td>{mtf?.next_candle_type} — <span style={{color:mtf?.next_candle_direction==='Bullish'?'#26a69a':'#ef5350'}}>{mtf?.next_candle_direction}</span></td></tr>
-                    <tr><td>1H Candle</td>
-                        <td>{mtf?.nc_1h?.type||'—'} — <span style={{color:mtf?.nc_1h?.direction==='Bullish'?'#26a69a':'#ef5350'}}>{mtf?.nc_1h?.direction||'—'}</span></td></tr>
-                    <tr><td>Alignment</td>
-                        <td style={{color:mtf?.alignment==='YES'?'#26a69a':'#ef5350'}}>
-                          {mtf?.alignment}
-                        </td></tr>
-                    <tr><td>Confidence</td><td>{mtf?.confidence}</td></tr>
-                    <tr><td>Entry</td>
-                        <td>{fmtPrice(setup.entry_zone?.[0],dec)} – {fmtPrice(setup.entry_zone?.[1],dec)}</td></tr>
-                    <tr><td>Stop Loss</td><td>{fmtPrice(setup.stop_loss,dec)}</td></tr>
-                    <tr><td>TP1 / TP2</td>
-                        <td>{fmtPrice(setup.take_profit_1,dec)} / {fmtPrice(setup.take_profit_2,dec)}</td></tr>
-                    <tr><td>R:R</td><td>{setup.rr_ratio_tp1} / {setup.rr_ratio_tp2}</td></tr>
-                    <tr><td>Pattern</td><td>{setup.pattern}</td></tr>
-                    <tr><td>Macro Sentiment</td>
-                        <td style={{color:macroColor}}>{macroLabel||'—'}{highImpactCount>0?` (${highImpactCount} high impact)`:''}</td></tr>
-                    <tr><td>ATR</td><td>{setup.atr}</td></tr>
-                    <tr><td>RSI</td><td>{setup.rsi}</td></tr>
-                  </tbody>
-                </table>
-                <p style={{fontSize:9,color:'#787b86',padding:'8px 4px 0'}}>
-                  ⚠ Technical analysis only. Not financial advice.
-                </p>
+                <table className="sum-table"><tbody>
+                  <tr><td>Asset</td><td>{symbol}</td></tr>
+                  <tr><td>HTF Bias</td><td style={{color:setup.htf_bias==='Bullish'?'#26a69a':setup.htf_bias==='Bearish'?'#ef5350':'#d1d4dc'}}>{setup.htf_bias}</td></tr>
+                  <tr><td>Phase</td><td>{setup.phase}</td></tr>
+                  <tr><td>{tf} Candle</td><td>{setup.next_type} — <span style={{color:setup.next_dir==='Bullish'?'#26a69a':'#ef5350'}}>{setup.next_dir}</span></td></tr>
+                  <tr><td>Confidence</td><td>{setup.confidence}</td></tr>
+                  <tr><td>Entry</td><td>{fmt(setup.entry_zone?.[0],dec)} – {fmt(setup.entry_zone?.[1],dec)}</td></tr>
+                  <tr><td>Stop Loss</td><td>{fmt(setup.stop_loss,dec)}</td></tr>
+                  <tr><td>TP1 / TP2</td><td>{fmt(setup.take_profit_1,dec)} / {fmt(setup.take_profit_2,dec)}</td></tr>
+                  <tr><td>R:R</td><td>{setup.rr1} / {setup.rr2}</td></tr>
+                  <tr><td>Macro</td><td style={{color:macroC}}>{macroLbl||'—'}{hiCount>0?` (${hiCount} high)`:''}</td></tr>
+                  <tr><td>RSI</td><td>{setup.rsi}</td></tr>
+                  <tr><td>ATR</td><td>{setup.atr}</td></tr>
+                </tbody></table>
+                {(setup.future_candles?.length>0)&&<p style={{fontSize:10,color:'#FFC800',padding:'6px 4px 0'}}>● {futureCount||setup.future_candles.length} neon yellow predicted candles on chart</p>}
+                <p style={{fontSize:9,color:'#787b86',padding:'8px 4px 0'}}>⚠ Not financial advice. Educational use only.</p>
               </Section>
 
-              {/* Projection note */}
-              {(setup.future_candles?.length>0)&&(
-                <p style={{fontSize:10,color:'#FFC800',padding:'4px 8px',marginTop:4}}>
-                  ● {setup.future_candles.length} neon yellow predicted candles on chart
-                </p>
-              )}
-
-              {/* Footer */}
-              <div style={{padding:'8px 8px 4px',borderTop:'1px solid #2a2e39',marginTop:8,
-                           display:'flex',justifyContent:'space-between',fontSize:10,color:'#787b86'}}>
-                <span>Binance REST + yFinance</span>
+              <div style={{padding:'8px',borderTop:'1px solid #2a2e39',marginTop:8,display:'flex',justifyContent:'space-between',fontSize:10,color:'#787b86'}}>
+                <span>Binance · Yahoo Finance · RSS News</span>
                 <span>⚡ 30s refresh</span>
               </div>
             </>
@@ -917,58 +712,28 @@ const App=()=>{
         </div>
       </div>
 
-      {/* ── SYMBOL SEARCH MODAL ── */}
+      {/* SEARCH MODAL */}
       {showSearch&&(
-        <div className="search-modal" onClick={()=>{setShowSearch(false);setSearchCat('');setQuery('');}}>
+        <div className="search-modal" onClick={()=>{setShowSearch(false);setQuery('');setSearchCat('');}}>
           <div className="search-box" onClick={e=>e.stopPropagation()}>
             <div style={{display:'flex',alignItems:'center',padding:'0 16px',borderBottom:'1px solid #2a2e39'}}>
               <span style={{color:'#787b86',marginRight:8}}>🔍</span>
-              <input ref={searchInputRef} className="search-input"
-                placeholder="Search — BTC/USDT, AAPL, GLD, GC=F, ^GSPC…"
+              <input ref={searchRef} className="search-input" placeholder="Search — BTC/USDT, AAPL, GLD, GC=F, ^GSPC…"
                 value={query} onChange={e=>setQuery(e.target.value)}
-                onKeyDown={e=>{
-                  if(e.key==='Enter'&&filtered.length>0) selectSym(filtered[0].symbol);
-                  if(e.key==='Escape') setShowSearch(false);
-                }}
-              />
-              <button onClick={()=>{setShowSearch(false);setSearchCat('');setQuery('');}}
-                style={{background:'none',border:'none',color:'#787b86',cursor:'pointer',fontSize:16}}>✕</button>
+                onKeyDown={e=>{if(e.key==='Enter'&&filtered.length)selectSym(filtered[0].symbol);if(e.key==='Escape')setShowSearch(false);}}/>
+              <button onClick={()=>{setShowSearch(false);setQuery('');setSearchCat('');}} style={{background:'none',border:'none',color:'#787b86',cursor:'pointer',fontSize:16}}>✕</button>
             </div>
-
-            {/* Category tabs */}
             <div style={{display:'flex',gap:0,padding:'6px 12px',borderBottom:'1px solid #2a2e39',flexWrap:'wrap'}}>
-              {[
-                {label:'All',         val:''},
-                {label:'Crypto',      val:'crypto'},
-                {label:'Stocks',      val:'stock'},
-                {label:'ETFs',        val:'etf'},
-                {label:'Commodities', val:'commodity'},
-                {label:'Indices',     val:'index'},
-              ].map(({label,val})=>(
-                <button key={label}
-                  style={{padding:'3px 9px',borderRadius:4,border:'none',cursor:'pointer',
-                          fontSize:10,marginRight:3,marginBottom:2,
-                          background:searchCat===val?'#2962ff':'transparent',
-                          color:searchCat===val?'#fff':'#787b86'}}
-                  onClick={()=>setSearchCat(val)}>
-                  {label}
-                </button>
+              {[{label:'All',val:''},{label:'Crypto',val:'crypto'},{label:'Stocks',val:'stock'},{label:'ETFs',val:'etf'},{label:'Commodities',val:'commodity'},{label:'Indices',val:'index'}].map(({label,val})=>(
+                <button key={label} style={{padding:'3px 9px',borderRadius:4,border:'none',cursor:'pointer',fontSize:10,marginRight:3,marginBottom:2,background:searchCat===val?'#2962ff':'transparent',color:searchCat===val?'#fff':'#787b86'}} onClick={()=>setSearchCat(val)}>{label}</button>
               ))}
             </div>
-
             <div style={{overflowY:'auto',flex:1}}>
-              {filtered.length===0&&(
-                <p style={{padding:16,color:'#787b86',fontSize:12,textAlign:'center'}}>
-                  No results. Try any yFinance ticker (e.g. RELIANCE.NS, BTC-USD)
-                </p>
-              )}
+              {filtered.length===0&&<p style={{padding:16,color:'#787b86',fontSize:12,textAlign:'center'}}>No results found.</p>}
               {filtered.map(s=>(
                 <div key={s.symbol} className="search-result" onClick={()=>selectSym(s.symbol)}>
-                  <span className={`badge badge-${s.type||'stock'}`}>{(s.type||'stock').toUpperCase()}</span>
-                  <div style={{flex:1}}>
-                    <p style={{fontSize:13,fontWeight:600,color:'#d1d4dc'}}>{s.symbol}</p>
-                    {s.name&&<p style={{fontSize:11,color:'#787b86'}}>{s.name}</p>}
-                  </div>
+                  <span className={`badge badge-${s.type}`}>{s.type.toUpperCase()}</span>
+                  <div style={{flex:1}}><p style={{fontSize:13,fontWeight:600,color:'#d1d4dc'}}>{s.symbol}</p>{s.name&&<p style={{fontSize:11,color:'#787b86'}}>{s.name}</p>}</div>
                   <span style={{fontSize:10,color:'#787b86'}}>{s.exchange}</span>
                 </div>
               ))}
@@ -976,13 +741,9 @@ const App=()=>{
           </div>
         </div>
       )}
-
-      {/* spin keyframe */}
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 };
-
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
