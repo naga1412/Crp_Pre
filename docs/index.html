@@ -145,6 +145,82 @@ function futureCandlesSim(candles,signal,atr,count){
     return{open:o,high:Math.max(o,c)+wick,low:Math.min(o,c)-wick,close:c};
   });
 }
+// ─── VOLUME PROFILE ENGINE ────────────────────────────────────────────────────
+function calcVolumeProfile(candles,numBuckets=100){
+  if(!candles||candles.length<10)return null;
+  const maxP=Math.max(...candles.map(c=>c.high));
+  const minP=Math.min(...candles.map(c=>c.low));
+  const rng=maxP-minP;if(rng<=0)return null;
+  const bSz=rng/numBuckets;
+  const vols=new Array(numBuckets).fill(0);
+  for(const c of candles){
+    const v=c.volume||0;if(!v)continue;
+    const cRng=c.high-c.low||bSz;
+    const iLo=Math.max(0,Math.floor((c.low-minP)/bSz));
+    const iHi=Math.min(numBuckets-1,Math.ceil((c.high-minP)/bSz));
+    for(let i=iLo;i<=iHi;i++){
+      const bLo=minP+i*bSz,bHi=bLo+bSz;
+      const ov=Math.min(c.high,bHi)-Math.max(c.low,bLo);
+      if(ov>0)vols[i]+=v*(ov/cRng);
+    }
+  }
+  let pocIdx=0;
+  for(let i=1;i<numBuckets;i++)if(vols[i]>vols[pocIdx])pocIdx=i;
+  const poc=minP+(pocIdx+0.5)*bSz;
+  const total=vols.reduce((s,v)=>s+v,0);
+  const target=total*0.70;
+  const inVAarr=new Array(numBuckets).fill(false);
+  inVAarr[pocIdx]=true;
+  let vaVol=vols[pocIdx],lo=pocIdx-1,hi=pocIdx+1;
+  while(vaVol<target&&(lo>=0||hi<numBuckets)){
+    const lv=lo>=0?vols[lo]:-1,rv=hi<numBuckets?vols[hi]:-1;
+    if(lv>=rv&&lo>=0){inVAarr[lo]=true;vaVol+=vols[lo];lo--;}
+    else if(hi<numBuckets){inVAarr[hi]=true;vaVol+=vols[hi];hi++;}
+    else break;
+  }
+  let vahIdx=pocIdx,valIdx=pocIdx;
+  for(let i=0;i<numBuckets;i++)if(inVAarr[i]){if(i>vahIdx)vahIdx=i;if(i<valIdx)valIdx=i;}
+  const vah=minP+(vahIdx+1)*bSz,val=minP+valIdx*bSz;
+  const avg=total/numBuckets;
+  const hvn=[],lvn=[];
+  for(let i=0;i<numBuckets;i++){
+    const p=minP+(i+0.5)*bSz;
+    if(vols[i]>avg*2.0)hvn.push(p);
+    else if(vols[i]>0&&vols[i]<avg*0.3)lvn.push(p);
+  }
+  return{poc,vah,val,hvn,lvn,bSz};
+}
+function vpPOCSignal(candles,poc){
+  if(!poc||candles.length<10)return null;
+  const last=candles[candles.length-1],prev=candles[candles.length-2];
+  if(!prev)return null;
+  const tol=poc*0.003;
+  if(Math.abs(last.high-poc)<tol&&last.close<poc-tol)return'rejection';
+  if(Math.abs(last.low-poc)<tol&&last.close>poc+tol)return'rejection';
+  const older=candles.slice(-20,-2);if(older.length<5)return null;
+  const was5=older.slice(-5);
+  if(was5.every(c=>c.close<poc)&&last.close>poc&&last.low<=poc+tol*2)return'continuation';
+  if(was5.every(c=>c.close>poc)&&last.close<poc&&last.high>=poc-tol*2)return'continuation';
+  return null;
+}
+function vpHVNOBConf(hvn,sw){
+  const r=[];if(!hvn?.length||!sw)return r;
+  for(const h of hvn){
+    for(const s of sw.sh)if(Math.abs(h-s.price)/s.price<0.006)r.push({price:h,type:'bear',label:'HVN + Bearish OB'});
+    for(const s of sw.sl)if(Math.abs(h-s.price)/s.price<0.006)r.push({price:h,type:'bull',label:'HVN + Bullish OB'});
+  }
+  return r.slice(0,3);
+}
+function vpLVNFVGConf(lvn,fvg,candles){
+  const r=[];if(!lvn?.length||!fvg?.length)return r;
+  for(const f of fvg){
+    const c1=candles[f.idx-1],c3=candles[f.idx+1];if(!c1||!c3)continue;
+    const mid=f.type==='bull'?(c1.high+c3.low)/2:(c1.low+c3.high)/2;
+    for(const l of lvn)if(Math.abs(l-mid)/mid<0.01)r.push({price:l,type:f.type,label:`LVN+${f.type==='bull'?'Bull':'Bear'} FVG`});
+  }
+  return r.slice(0,3);
+}
+
 function generateSetup(candles,price){
   if(!candles||candles.length<55) return null;
   const C=candles.map(c=>c.close),H=candles.map(c=>c.high),L=candles.map(c=>c.low);
@@ -155,16 +231,28 @@ function generateSetup(candles,price){
   const sw=detectSwings(H,L);
   const fvg=detectFVG(candles),bos=detectBOS(candles,sw);
 
+  // ── Volume Profile (current TF) ──────────────────────────────────────────────
+  const vp=calcVolumeProfile(candles);
+  const pocAbove=!!vp&&price>vp.poc;
+  const pocBelow=!!vp&&price<vp.poc;
+  const inVA=!!vp&&price>=vp.val&&price<=vp.vah;
+  const pocSig=vp?vpPOCSignal(candles,vp.poc):null;
+  const hvnConf=vp?vpHVNOBConf(vp.hvn,sw):[];
+  const lvnConf=vp?vpLVNFVGConf(vp.lvn,fvg,candles):[];
+  // VP contrib: above POC outside VA=10pts bull, below POC outside VA=0pts, in VA or no VP=5pts neutral
+  const vpContrib=vp?(pocAbove&&!inVA?10:pocBelow&&!inVA?0:5):5;
+
   // ── EMA alignment (primary — never overridden by RSI alone) ──────────────
   const bullBias=price>le9&&le9>le21&&le21>le50;  // full bull stack
   const bearBias=price<le9&&le9<le21&&le21<le50;  // full bear stack
   const htf=bullBias?'Bullish':bearBias?'Bearish':'Neutral';
 
-  // ── Bull/bear score (for bar display) ─────────────────────────────────────
-  const bullPct=
-    (price>le9?20:0)+(price>le21?20:0)+(price>le50?15:0)+
-    (lRSI>50?15:0)+(bos.filter(b=>b.type==='bull').length>0?15:0)+
-    (fvg.filter(f=>f.type==='bull').length>0?15:0);
+  // ── Bull/bear score — includes VP contribution (10% weight) ───────────────
+  const bullPct=Math.min(100,
+    (price>le9?18:0)+(price>le21?18:0)+(price>le50?14:0)+
+    (lRSI>50?14:0)+(bos.filter(b=>b.type==='bull').length>0?14:0)+
+    (fvg.filter(f=>f.type==='bull').length>0?14:0)+
+    vpContrib); // max: 18+18+14+14+14+14+10=102→100
 
   // ── Signal: HTF trend is the MASTER, RSI only fine-tunes at extremes ──────
   // In clear uptrend  → LONG unless RSI extremely overbought (>80)
@@ -177,10 +265,12 @@ function generateSetup(candles,price){
     const hasBullBOS=bos.length>0&&bos[bos.length-1].type==='bull';
     signal = (lRSI<20&&hasBullBOS) ? 'LONG' : 'SHORT';
   } else {
-    // Neutral zone: last BOS wins, tie-break by score
+    // Neutral zone: last BOS wins, VP POC tiebreak, then score
     const lastBOS=bos[bos.length-1];
     if(lastBOS?.type==='bull'&&lRSI<65) signal='LONG';
     else if(lastBOS?.type==='bear'&&lRSI>35) signal='SHORT';
+    else if(pocAbove&&!inVA) signal='LONG';   // above POC outside VA = bullish
+    else if(pocBelow&&!inVA) signal='SHORT';  // below POC outside VA = bearish
     else signal=bullPct>=50?'LONG':'SHORT';
   }
 
@@ -219,6 +309,12 @@ function generateSetup(candles,price){
     next_size:lATR/price>0.02?'Large':lATR/price>0.008?'Medium':'Small',
     confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
     future_candles:futureCandlesSim(candles,signal,lATR,12), // deterministic
+    // Volume Profile
+    vp:vp?{poc:vp.poc,vah:vp.vah,val:vp.val,hvn:(vp.hvn||[]).slice(0,5),lvn:(vp.lvn||[]).slice(0,5)}:null,
+    poc_signal:pocSig,
+    hvn_conf:hvnConf,
+    lvn_conf:lvnConf,
+    in_value_area:inVA,
   };
 }
 
@@ -494,8 +590,9 @@ const App=()=>{
   const[searchCat,setSearchCat]=useState('');
   const[prevClose,setPrevClose]=useState(null);
   const[futureCount,setFutureCount]=useState('');
+  const[mtfVP,setMtfVP]=useState(null);
 
-  const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null);
+  const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]);
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
 
   // Chart init
@@ -554,6 +651,20 @@ const App=()=>{
     markers.sort((a,b)=>a.time-b.time);
     cSeries.current.setMarkers(markers);
     if(hist.length) setPrevClose(hist[hist.length-1].close);
+    // ── VP price lines (POC / VAH / VAL / HVN) ────────────────────────────────
+    vpLinesRef.current.forEach(l=>{try{cSeries.current.removePriceLine(l);}catch(_){}});
+    vpLinesRef.current=[];
+    if(setup?.vp&&cSeries.current){
+      const{poc,vah,val,hvn=[]}=setup.vp;
+      vpLinesRef.current.push(
+        cSeries.current.createPriceLine({price:poc,color:'#FF9800',lineWidth:2,lineStyle:0,axisLabelVisible:true,title:'POC'}),
+        cSeries.current.createPriceLine({price:vah,color:'#26a69a',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'VAH'}),
+        cSeries.current.createPriceLine({price:val,color:'#ef5350',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'VAL'}),
+      );
+      hvn.slice(0,3).forEach(p=>vpLinesRef.current.push(
+        cSeries.current.createPriceLine({price:p,color:'#FF980055',lineWidth:1,lineStyle:3,axisLabelVisible:false,title:'HVN'})
+      ));
+    }
   },[candles,setup,nd,futureCount]);
 
   // WebSocket (Binance direct for crypto; poll REST for stocks)
@@ -601,12 +712,28 @@ const App=()=>{
     finally{if(!quiet)setLoading(false);}
   },[]);
 
+  // MTF Volume Profile: fetch 1W/1D/4H/1H candles → compute VP for each → weighted bias
+  const loadMTFVP=useCallback(async(sym)=>{
+    const TFS=['1w','1d','4h','1h'];
+    const vps={};
+    await Promise.allSettled(TFS.map(async t=>{
+      try{vps[t]=calcVolumeProfile(await fetchCandles(sym,t,300));}catch(_){}
+    }));
+    setMtfVP(vps);
+  },[]);
+
   // Initial load + 30s refresh
   useEffect(()=>{
     load(symbol,tf);
     const id=setInterval(()=>load(symbol,tf,true),30000);
     return()=>clearInterval(id);
   },[symbol,tf]);
+
+  // MTF VP fetch — re-runs only on symbol change (not TF)
+  useEffect(()=>{
+    setMtfVP(null);
+    loadMTFVP(symbol);
+  },[symbol]);
 
   // News: fetch fresh headlines, merge into 200-item rolling store, refresh every 60s
   useEffect(()=>{
@@ -638,6 +765,21 @@ const App=()=>{
     if(!q)return pool.slice(0,120);
     return pool.filter(s=>s.symbol.toUpperCase().includes(q)||s.name?.toUpperCase().includes(q)).slice(0,120);
   },[query,searchCat]);
+
+  // MTF VP bias score: 0–100 (50=neutral), weighted 1W·40%+1D·30%+4H·20%+1H·10%
+  const mtfVPScore=useMemo(()=>{
+    if(!mtfVP||!price)return null;
+    const W={'1w':0.40,'1d':0.30,'4h':0.20,'1h':0.10};
+    let s=0;
+    for(const[t,w]of Object.entries(W)){
+      const v=mtfVP[t];if(!v)continue;
+      s+=w*(price>v.poc?1:price<v.poc?-1:0);
+    }
+    return Math.round((s+1)*50); // –1..1 → 0..100
+  },[mtfVP,price]);
+
+  // Combined bias: SMC/EMA 70% + MTF VP 30%
+  const combinedBias=setup?Math.round((setup.bull_pct??50)*0.7+(mtfVPScore??50)*0.3):null;
 
   const selectSym=s=>{setShowSearch(false);setQuery('');setSearchCat('');setSymbol(s);};
   const changeTf=t=>{setTf(t);load(symbol,t);};
@@ -714,11 +856,14 @@ const App=()=>{
                 <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px'}}>
                   <span style={{fontSize:10,color:'#787b86',minWidth:28}}>Bull</span>
                   <div style={{flex:1,height:5,background:'#2a2e39',borderRadius:3,overflow:'hidden'}}>
-                    <div style={{height:'100%',borderRadius:3,background:'linear-gradient(90deg,#26a69a,#2962ff)',width:`${setup.bull_pct||50}%`}}/>
+                    <div style={{height:'100%',borderRadius:3,background:'linear-gradient(90deg,#26a69a,#2962ff)',width:`${combinedBias??setup.bull_pct||50}%`}}/>
                   </div>
                   <span style={{fontSize:10,color:'#787b86',minWidth:28,textAlign:'right'}}>Bear</span>
                 </div>
-                <p style={{fontSize:10,color:'#787b86',padding:'4px 4px 0'}}>{setup.bull_pct}% bull · {setup.bear_pct}% bear</p>
+                <p style={{fontSize:10,color:'#787b86',padding:'4px 4px 0'}}>
+                  {combinedBias??setup.bull_pct}% bull · {100-(combinedBias??setup.bull_pct)}% bear
+                  {mtfVPScore!=null&&<span style={{color:'#FF9800'}}> · VP {mtfVPScore}%</span>}
+                </p>
               </Section>
 
               <Section title="Next Candle Prediction" icon="🕯">
@@ -779,6 +924,97 @@ const App=()=>{
                     <span style={{color:'#787b86'}}>EMA 50</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema50,dec)}</span>
                   </div>
                 </div>
+              </Section>
+
+              <Section title="Volume Profile" icon="📊" open={false}>
+                {!setup?.vp?<p style={{fontSize:11,color:'#787b86'}}>Insufficient volume data.</p>:(
+                  <>
+                    {/* MTF VP Bias Bar */}
+                    <div style={{marginBottom:8,padding:'6px 8px',background:'#131722',borderRadius:6}}>
+                      <p style={{fontSize:10,color:'#787b86',marginBottom:4}}>MTF VP Bias — 1W·40% + 1D·30% + 4H·20% + 1H·10%</p>
+                      {mtfVPScore!=null?(
+                        <>
+                          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:3}}>
+                            <div style={{flex:1,height:5,background:'#2a2e39',borderRadius:3,overflow:'hidden'}}>
+                              <div style={{height:'100%',borderRadius:3,background:mtfVPScore>=50?'linear-gradient(90deg,#26a69a,#2962ff)':'linear-gradient(90deg,#ef5350,#ff9800)',width:`${mtfVPScore}%`}}/>
+                            </div>
+                            <span style={{fontSize:11,fontWeight:700,color:mtfVPScore>=55?'#26a69a':mtfVPScore<=45?'#ef5350':'#FF9800'}}>{mtfVPScore}%</span>
+                          </div>
+                          <p style={{fontSize:10,color:mtfVPScore>=55?'#26a69a':mtfVPScore<=45?'#ef5350':'#FF9800'}}>
+                            {mtfVPScore>=55?'▲ Bullish VP Structure':mtfVPScore<=45?'▼ Bearish VP Structure':'─ Equilibrium / Value Area'}
+                          </p>
+                        </>
+                      ):<p style={{fontSize:10,color:'#787b86'}}>Fetching MTF data…</p>}
+                    </div>
+                    {/* Current TF: POC / VAH / VAL */}
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:4,marginBottom:6}}>
+                      <div style={{background:'#131722',borderRadius:6,padding:'5px 7px',border:'1px solid #FF980066'}}>
+                        <p style={{fontSize:9,color:'#FF9800',fontWeight:700}}>POC</p>
+                        <p style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',marginTop:1}}>{fmt(setup.vp.poc,dec)}</p>
+                      </div>
+                      <div style={{background:'#131722',borderRadius:6,padding:'5px 7px',border:'1px solid #26a69a44'}}>
+                        <p style={{fontSize:9,color:'#26a69a',fontWeight:700}}>VAH</p>
+                        <p style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',marginTop:1}}>{fmt(setup.vp.vah,dec)}</p>
+                      </div>
+                      <div style={{background:'#131722',borderRadius:6,padding:'5px 7px',border:'1px solid #ef535044'}}>
+                        <p style={{fontSize:9,color:'#ef5350',fontWeight:700}}>VAL</p>
+                        <p style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',marginTop:1}}>{fmt(setup.vp.val,dec)}</p>
+                      </div>
+                    </div>
+                    {/* Value Area status */}
+                    <p style={{fontSize:10,padding:'2px 4px 6px',color:setup.in_value_area?'#FF9800':'#787b86'}}>
+                      {setup.in_value_area?'⚠ Price in Value Area — Low-probability trade zone':'Price outside Value Area'}
+                    </p>
+                    {/* POC Signal */}
+                    {setup.poc_signal&&(
+                      <div style={{padding:'5px 8px',marginBottom:6,borderRadius:6,border:`1px solid ${setup.poc_signal==='rejection'?'#ef535055':'#26a69a55'}`,background:setup.poc_signal==='rejection'?'#ef535015':'#26a69a15'}}>
+                        <p style={{fontSize:11,fontWeight:700,color:setup.poc_signal==='rejection'?'#ef5350':'#26a69a'}}>
+                          {setup.poc_signal==='rejection'?'⚡ POC Rejection — High-Prob Reversal':'⚡ POC Breakout+Retest — High-Prob Continuation'}
+                        </p>
+                      </div>
+                    )}
+                    {/* HVN / OB Confluence */}
+                    {setup.hvn_conf?.length>0&&(
+                      <div style={{marginBottom:6}}>
+                        <p style={{fontSize:10,color:'#FF9800',fontWeight:600,padding:'2px 4px 4px'}}>🔥 HVN + Order Block Confluence</p>
+                        {setup.hvn_conf.map((c,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 8px',fontSize:10}}>
+                            <span style={{color:c.type==='bull'?'#26a69a':'#ef5350'}}>{c.label}</span>
+                            <span style={{fontFamily:'monospace',color:'#d1d4dc'}}>{fmt(c.price,dec)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* LVN / FVG Confluence */}
+                    {setup.lvn_conf?.length>0&&(
+                      <div style={{marginBottom:6}}>
+                        <p style={{fontSize:10,color:'#2962ff',fontWeight:600,padding:'2px 4px 4px'}}>⚡ LVN + FVG Fast Move Zones</p>
+                        {setup.lvn_conf.map((c,i)=>(
+                          <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'2px 8px',fontSize:10}}>
+                            <span style={{color:c.type==='bull'?'#26a69a':'#ef5350'}}>{c.label}</span>
+                            <span style={{fontFamily:'monospace',color:'#d1d4dc'}}>{fmt(c.price,dec)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {/* MTF VP Breakdown */}
+                    {mtfVP&&(
+                      <div>
+                        <p style={{fontSize:10,color:'#787b86',fontWeight:600,padding:'2px 4px 4px'}}>MTF VP Breakdown</p>
+                        {[['1w','1W',0.40],['1d','1D',0.30],['4h','4H',0.20],['1h','1H',0.10]].map(([key,label,w])=>{
+                          const v=mtfVP[key];if(!v)return null;
+                          const ab=price>v.poc,be=price<v.poc;
+                          return(<div key={key} style={{display:'flex',alignItems:'center',gap:6,padding:'3px 4px',fontSize:10}}>
+                            <span style={{color:'#787b86',minWidth:22,fontWeight:600}}>{label}</span>
+                            <span style={{color:'#787b86',minWidth:28}}>{(w*100).toFixed(0)}%wt</span>
+                            <span style={{fontSize:9,padding:'1px 6px',borderRadius:3,background:ab?'#26a69a22':be?'#ef535022':'#FF980022',color:ab?'#26a69a':be?'#ef5350':'#FF9800'}}>{ab?'▲ Bull':be?'▼ Bear':'─ Neut'}</span>
+                            <span style={{fontFamily:'monospace',color:'#787b86',marginLeft:'auto',fontSize:9}}>POC {fmt(v.poc,dec)}</span>
+                          </div>);
+                        })}
+                      </div>
+                    )}
+                  </>
+                )}
               </Section>
 
               <Section title={`News & Macro Impact${hiCount>0?` 🔴${hiCount}`:''}`} icon="📰" open={true}>
