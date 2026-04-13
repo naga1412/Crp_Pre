@@ -629,11 +629,29 @@ function clsDir(d){return d==='Bullish'?'text-bull':'text-bear';}
 const tsToSec=ts=>{const s=String(ts).replace(' ','T');return Math.floor(new Date(s.endsWith('Z')?s:s+'Z').getTime()/1000);};
 
 // ─── COMPONENTS ───────────────────────────────────────────────────────────────
-function Section({title,icon,children,open:def=true}){
-  const[open,setOpen]=useState(def);
-  return(<div className="mb-1"><div className="acc-header" onClick={()=>setOpen(!open)}><span>{icon} {title}</span><span style={{fontSize:9}}>{open?'▲':'▼'}</span></div>{open&&<div className="acc-body">{children}</div>}</div>);
+function Info({text}){
+  const[show,setShow]=useState(false);
+  return(
+    <span style={{position:'relative',display:'inline-flex',alignItems:'center',marginLeft:4,verticalAlign:'middle'}}>
+      <span
+        onMouseEnter={()=>setShow(true)}
+        onMouseLeave={()=>setShow(false)}
+        onClick={e=>{e.stopPropagation();setShow(s=>!s);}}
+        style={{cursor:'help',color:'#2962ff',fontSize:9,fontWeight:800,border:'1px solid #2962ff66',borderRadius:'50%',width:13,height:13,display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:0,userSelect:'none'}}
+      >i</span>
+      {show&&(
+        <div style={{position:'fixed',zIndex:9999,background:'#1e222d',border:'1px solid #2962ff44',borderRadius:7,padding:'9px 11px',width:240,fontSize:10.5,color:'#d1d4dc',lineHeight:1.6,boxShadow:'0 8px 24px rgba(0,0,0,.8)',pointerEvents:'none',marginTop:4,whiteSpace:'normal'}}>
+          {text}
+        </div>
+      )}
+    </span>
+  );
 }
-function Tile({label,value,color}){return(<div className="bg-[#131722] rounded p-2"><p className="text-[10px] text-tvsub mb-0.5">{label}</p><p className={`text-xs font-semibold ${color||'text-white'}`}>{value||'—'}</p></div>);}
+function Section({title,icon,children,open:def=true,info}){
+  const[open,setOpen]=useState(def);
+  return(<div className="mb-1"><div className="acc-header" onClick={()=>setOpen(!open)}><span style={{display:'flex',alignItems:'center'}}>{icon} {title}{info&&<Info text={info}/>}</span><span style={{fontSize:9}}>{open?'▲':'▼'}</span></div>{open&&<div className="acc-body">{children}</div>}</div>);
+}
+function Tile({label,value,color,info}){return(<div className="bg-[#131722] rounded p-2"><p className="text-[10px] text-tvsub mb-0.5" style={{display:'flex',alignItems:'center'}}>{label}{info&&<Info text={info}/>}</p><p className={`text-xs font-semibold ${color||'text-white'}`}>{value||'—'}</p></div>);}
 
 function NewsItem({item}){
   const sc=item.sentiment==='bullish'?'#26a69a':item.sentiment==='bearish'?'#ef5350':'#787b86';
@@ -1041,7 +1059,7 @@ const App=()=>{
               {masterBias&&(
                 <div style={{margin:'0 0 8px',padding:'10px 12px',background:'#131722',borderRadius:8,border:`2px solid ${masterBias.color}44`}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                    <span style={{fontSize:11,color:'#787b86',fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px'}}>Master Bias Score</span>
+                    <span style={{fontSize:11,color:'#787b86',fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px',display:'flex',alignItems:'center'}}>Master Bias Score <Info text="Weighted combination of all 8 analysis modules into one score from -100 to +100. Above +60 = Strong Bullish. +30 to +60 = Bullish. -30 to +30 = Neutral (no trade). -30 to -60 = Bearish. Below -60 = Strong Bearish. Only trade when score is outside the neutral zone AND ML Confidence is above 50%."/></span>
                     <span style={{fontSize:11,fontWeight:700,color:masterBias.color,background:masterBias.color+'18',padding:'2px 10px',borderRadius:10,border:`1px solid ${masterBias.color}44`}}>{masterBias.label}</span>
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
@@ -1057,7 +1075,7 @@ const App=()=>{
                     </div>
                   </div>
                   <div style={{display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{fontSize:10,color:'#787b86'}}>ML Confidence</span>
+                    <span style={{fontSize:10,color:'#787b86',display:'flex',alignItems:'center'}}>ML Confidence <Info text="Measures how strongly all signals agree with each other. Above 75% = high signal alignment, flagged as high-probability setup. 50–74% = moderate agreement, trade with normal caution. Below 50% = signals conflicting, reduce position size or wait for clearer setup. Calculated by re-weighting all feature scores using ML-style importance weights."/></span>
                     <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden'}}>
                       <div style={{width:masterBias.mlConf+'%',height:'100%',background:masterBias.mlConf>75?'#26a69a':masterBias.mlConf>50?'#ff9800':'#ef5350',borderRadius:2}}/>
                     </div>
@@ -1067,12 +1085,12 @@ const App=()=>{
                 </div>
               )}
 
-              <Section title="HTF Bias & Structure" icon="📊">
+              <Section title="HTF Bias & Structure" icon="📊" info="Higher Timeframe structure analysis using EMA 9/21/50 alignment, RSI, BOS signals, and Wyckoff phase. The bull% bar shows the overall directional score out of 100.">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                  <Tile label="HTF Bias" value={setup.htf_bias} color={clsDir(setup.htf_bias)}/>
-                  <Tile label="Phase" value={setup.phase}/>
-                  <Tile label="Confidence" value={setup.confidence} color={setup.confidence==='High'?'text-bull':setup.confidence==='Medium'?'text-yellow-400':'text-bear'}/>
-                  <Tile label="RSI (14)" value={setup.rsi} color={+setup.rsi>70?'text-bear':+setup.rsi<30?'text-bull':'text-white'}/>
+                  <Tile label="HTF Bias" value={setup.htf_bias} color={clsDir(setup.htf_bias)} info="Higher Timeframe Trend Bias. Bullish = price above EMA9 > EMA21 > EMA50 (stacked correctly). Bearish = inverse stack. Neutral = mixed alignment. This is the primary trend direction filter."/>
+                  <Tile label="Phase" value={setup.phase} info="Wyckoff Market Phase. Accumulation = smart money quietly buying at lows. Markup = price rising with momentum. Distribution = smart money selling at highs. Markdown = price falling. Use phase to align with institutional intent."/>
+                  <Tile label="Confidence" value={setup.confidence} color={setup.confidence==='High'?'text-bull':setup.confidence==='Medium'?'text-yellow-400':'text-bear'} info="Signal confidence based on how decisively the bull% score deviates from 50. High (>68% or <32%) = strong conviction. Medium (57-68%) = moderate. Low (43-57%) = uncertain — avoid trading in this zone."/>
+                  <Tile label="RSI (14)" value={setup.rsi} color={+setup.rsi>70?'text-bear':+setup.rsi<30?'text-bull':'text-white'} info="Relative Strength Index (14 period). Measures momentum speed. Above 70 = overbought — price may be overextended, watch for reversal. Below 30 = oversold — potential bounce zone. Best used for divergence: price makes new high but RSI doesn't = bearish warning."/>
                 </div>
                 <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px'}}>
                   <span style={{fontSize:10,color:'#787b86',minWidth:28}}>Bull</span>
@@ -1084,13 +1102,13 @@ const App=()=>{
                 <p style={{fontSize:10,color:'#787b86',padding:'4px 4px 0'}}>{setup.bull_pct}% bull · {setup.bear_pct}% bear</p>
               </Section>
 
-              <Section title="Volume Profile" icon="📊" open={true}>
+              <Section title="Volume Profile" icon="📊" open={true} info="Shows how much volume was traded at each price level. The histogram on the right edge of the chart visualises this — taller bars = more volume = stronger price levels. Orange line = POC, green dashed = VAH, red dashed = VAL.">
                 {setup.vp_poc!=null&&(
                   <div style={{marginBottom:6}}>
                     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:4,marginBottom:6}}>
-                      <Tile label="POC" value={fmt(setup.vp_poc,dec)} color="text-yellow-400"/>
-                      <Tile label="VAH" value={fmt(setup.vp_vah,dec)} color="text-bull"/>
-                      <Tile label="VAL" value={fmt(setup.vp_val,dec)} color="text-bear"/>
+                      <Tile label="POC" value={fmt(setup.vp_poc,dec)} color="text-yellow-400" info="Point of Control — the single price level with the highest traded volume. Acts like a price magnet. Price often returns here. Expect a reaction (rejection or breakout) when price touches POC."/>
+                      <Tile label="VAH" value={fmt(setup.vp_vah,dec)} color="text-bull" info="Value Area High — upper boundary where 70% of total volume was traded. Price above VAH = trading at a premium. Resistance when approached from below. If price breaks above VAH and holds, it signals bullish acceptance."/>
+                      <Tile label="VAL" value={fmt(setup.vp_val,dec)} color="text-bear" info="Value Area Low — lower boundary of the 70% volume zone. Price below VAL = trading at a discount. Support when approached from above. If price breaks below VAL and holds, it signals bearish acceptance."/>
                     </div>
                     {setup.vp_hvn?.length>0&&<p style={{fontSize:10,color:'#ffd600',padding:'2px 4px'}}>HVN: {setup.vp_hvn.slice(0,3).map(p=>fmt(p,dec)).join(' · ')}</p>}
                     {setup.vp_lvn?.length>0&&<p style={{fontSize:10,color:'#546e7a',padding:'2px 4px'}}>LVN: {setup.vp_lvn.slice(0,3).map(p=>fmt(p,dec)).join(' · ')}</p>}
@@ -1118,13 +1136,13 @@ const App=()=>{
                 {!setup.vp_poc&&!mtfVPScore&&<p style={{fontSize:11,color:'#787b86'}}>Loading VP…</p>}
               </Section>
 
-              <Section title="Momentum Indicators" icon="📈" open={false}>
+              <Section title="Momentum Indicators" icon="📈" open={false} info="Four momentum indicators combined into one score. Each confirms or contradicts the trend. Never use any single indicator alone — look for confluence (2+ agreeing) before acting.">
                 {momentumSig&&(<>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                    <Tile label="RSI (14)" value={momentumSig.signals.rsi?.value} color={+momentumSig.signals.rsi?.value>70?'text-bear':+momentumSig.signals.rsi?.value<30?'text-bull':'text-white'}/>
-                    <Tile label="MACD" value={momentumSig.signals.macd?.cross?momentumSig.signals.macd.cross==='bull'?'Bullish Cross':'Bearish Cross':momentumSig.signals.macd?.hist>0?'Bullish':'Bearish'} color={momentumSig.signals.macd?.hist>0?'text-bull':'text-bear'}/>
-                    <Tile label="Stoch RSI K" value={momentumSig.signals.stoch?.k} color={+momentumSig.signals.stoch?.k<20?'text-bull':+momentumSig.signals.stoch?.k>80?'text-bear':'text-white'}/>
-                    <Tile label="CMF (20)" value={momentumSig.signals.cmf?.value} color={+momentumSig.signals.cmf?.value>0?'text-bull':'text-bear'}/>
+                    <Tile label="RSI (14)" value={momentumSig.signals.rsi?.value} color={+momentumSig.signals.rsi?.value>70?'text-bear':+momentumSig.signals.rsi?.value<30?'text-bull':'text-white'} info="Relative Strength Index — momentum speed. Above 70 = overbought (potential reversal down). Below 30 = oversold (potential bounce). 50 = neutral. Key signal: divergence — price makes new high but RSI makes lower high = hidden bearish weakness."/>
+                    <Tile label="MACD" value={momentumSig.signals.macd?.cross?momentumSig.signals.macd.cross==='bull'?'Bullish Cross':'Bearish Cross':momentumSig.signals.macd?.hist>0?'Bullish':'Bearish'} color={momentumSig.signals.macd?.hist>0?'text-bull':'text-bear'} info="MACD (12/26/9) — trend momentum. Bullish Cross = MACD line crosses above signal line (buy signal). Bearish Cross = crosses below (sell signal). Histogram above zero and expanding = momentum building. Histogram shrinking = momentum fading."/>
+                    <Tile label="Stoch RSI K" value={momentumSig.signals.stoch?.k} color={+momentumSig.signals.stoch?.k<20?'text-bull':+momentumSig.signals.stoch?.k>80?'text-bear':'text-white'} info="Stochastic RSI — RSI of RSI. More sensitive than plain RSI. Below 20 = oversold (look for long entries at support). Above 80 = overbought (look for short entries at resistance). K crossing above D = bullish entry signal."/>
+                    <Tile label="CMF (20)" value={momentumSig.signals.cmf?.value} color={+momentumSig.signals.cmf?.value>0?'text-bull':'text-bear'} info="Chaikin Money Flow — measures buy/sell pressure over 20 bars using volume × candle position. Above 0 = buying pressure dominant (bullish). Below 0 = selling pressure dominant (bearish). Above +0.25 = strong accumulation. Below -0.25 = strong distribution."/>
                   </div>
                   {momentumSig.signals.rsi?.divergence&&<div style={{padding:'4px 8px',background:'#ff980018',borderRadius:4,border:'1px solid #ff980044',fontSize:10,color:'#ff9800',marginBottom:4}}>⚡ RSI {momentumSig.signals.rsi.divergence.replace('_',' ')} divergence</div>}
                   {momentumSig.signals.bb?.squeeze&&<div style={{padding:'4px 8px',background:'#2962ff18',borderRadius:4,border:'1px solid #2962ff44',fontSize:10,color:'#2962ff',marginBottom:4}}>🔴 BB Squeeze inside Keltner — breakout imminent</div>}
@@ -1135,13 +1153,13 @@ const App=()=>{
                 </>)}
               </Section>
 
-              <Section title="Market Microstructure" icon="🔬" open={false}>
+              <Section title="Market Microstructure" icon="🔬" open={false} info="Analyses the internal mechanics of price movement — who is actually buying vs selling at each candle. Reveals hidden institutional activity invisible on standard candle charts.">
                 {microSig&&(<>
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                    <Tile label="Order Flow" value={microSig.signals.dominance==='buy'?'Buy Dominant':microSig.signals.dominance==='sell'?'Sell Dominant':'Balanced'} color={microSig.signals.dominance==='buy'?'text-bull':microSig.signals.dominance==='sell'?'text-bear':'text-white'}/>
-                    <Tile label="BVIX Proxy" value={microSig.bvix+'%'} color={microSig.bvix>5?'text-yellow-400':'text-white'}/>
-                    <Tile label="Absorption Zones" value={microSig.signals.absorptionZones} color={microSig.signals.absorptionZones>0?'text-yellow-400':'text-white'}/>
-                    <Tile label="Delta Div" value={microSig.signals.cdDivergence?microSig.signals.cdDir:'None'} color={microSig.signals.cdDivergence?'text-yellow-400':'text-white'}/>
+                    <Tile label="Order Flow" value={microSig.signals.dominance==='buy'?'Buy Dominant':microSig.signals.dominance==='sell'?'Sell Dominant':'Balanced'} color={microSig.signals.dominance==='buy'?'text-bull':microSig.signals.dominance==='sell'?'text-bear':'text-white'} info="Delta dominance over last 5 candles. Each candle's volume is split into buy-side (close near high) vs sell-side (close near low). Buy Dominant = more aggressive buyers. Sell Dominant = more aggressive sellers. Confirms or contradicts the price direction."/>
+                    <Tile label="BVIX Proxy" value={microSig.bvix+'%'} color={microSig.bvix>5?'text-yellow-400':'text-white'} info="Volatility proxy — ATR(14) expressed as % of current price. Higher % = more volatile, wider stop-losses needed. Below 2% = low volatility (breakout possible). Above 5% = high volatility (reduce position size, expect larger swings)."/>
+                    <Tile label="Absorption Zones" value={microSig.signals.absorptionZones} color={microSig.signals.absorptionZones>0?'text-yellow-400':'text-white'} info="Count of candles with high volume but small price range. This means large orders are absorbing price movement — a sign of institutional activity. Often appears at reversals where smart money is accumulating or distributing against retail pressure."/>
+                    <Tile label="Delta Div" value={microSig.signals.cdDivergence?microSig.signals.cdDir:'None'} color={microSig.signals.cdDivergence?'text-yellow-400':'text-white'} info="Cumulative Delta Divergence — when price direction and net buying/selling pressure disagree. Price rising but delta falling = buyers are weakening, bearish warning. Price falling but delta rising = sellers are drying up, bullish warning. One of the strongest leading reversal signals."/>
                   </div>
                   {microSig.signals.cdDivergence&&<div style={{padding:'4px 8px',background:'#ff980018',borderRadius:4,border:'1px solid #ff980044',fontSize:10,color:'#ff9800',marginBottom:4}}>⚠ Cumulative delta divergence — {microSig.signals.cdDir}</div>}
                   {liqMap?.grabs?.length>0&&<div style={{padding:'4px 8px',background:'#ef535018',borderRadius:4,border:'1px solid #ef535044',fontSize:10,color:'#ef5350',marginBottom:4}}>⚡ {liqMap.grabs.length} liquidity grab(s) detected</div>}
@@ -1152,18 +1170,18 @@ const App=()=>{
                 </>)}
               </Section>
 
-              <Section title="OI & Funding Rate" icon="📊" open={false}>
+              <Section title="OI & Funding Rate" icon="📊" open={false} info="Futures market data from Binance. Open Interest shows how many contracts are open. Funding Rate reveals whether the market is overleveraged long or short — extreme values are contrarian signals. Only available for crypto assets.">
                 {oiFunding?(
                   <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
-                    <Tile label="Open Interest" value={oiFunding.openInterest?Number(oiFunding.openInterest).toLocaleString(undefined,{notation:'compact',maximumFractionDigits:2}):'—'}/>
-                    <Tile label="Funding Rate" value={oiFunding.fundingRate!=null?(oiFunding.fundingRate*100).toFixed(4)+'%':'—'} color={oiFunding.fundingRate>0.001?'text-bear':oiFunding.fundingRate<-0.001?'text-bull':'text-white'}/>
+                    <Tile label="Open Interest" value={oiFunding.openInterest?Number(oiFunding.openInterest).toLocaleString(undefined,{notation:'compact',maximumFractionDigits:2}):'—'} info="Total number of outstanding futures contracts. Rising OI + rising price = strong trend (new money entering). Rising OI + falling price = strong downtrend. Falling OI + price move = short covering or profit taking — weaker move, likely to reverse."/>
+                    <Tile label="Funding Rate" value={oiFunding.fundingRate!=null?(oiFunding.fundingRate*100).toFixed(4)+'%':'—'} color={oiFunding.fundingRate>0.001?'text-bear':oiFunding.fundingRate<-0.001?'text-bull':'text-white'} info="Fee paid every 8 hours between long and short traders. Positive = longs pay shorts (too many longs). Negative = shorts pay longs (too many shorts). Above +0.1% = market overleveraged long → contrarian bearish signal. Below -0.1% = overleveraged short → contrarian bullish signal. Extreme spikes = high-probability reversal zone."/>
                     <div style={{gridColumn:'1/-1',padding:'4px 8px',background:'#131722',borderRadius:4,fontSize:10,color:'#787b86'}}>{oiSig?.fundingSignal||'—'}</div>
                     {oiFunding.fundingRate!=null&&Math.abs(oiFunding.fundingRate)>0.001&&<div style={{gridColumn:'1/-1',padding:'4px 8px',background:oiFunding.fundingRate>0?'#ef535018':'#26a69a18',borderRadius:4,border:`1px solid ${oiFunding.fundingRate>0?'#ef535044':'#26a69a44'}`,fontSize:10,color:oiFunding.fundingRate>0?'#ef5350':'#26a69a'}}>⚡ {oiFunding.fundingRate>0.001?'Market overleveraged LONG — contrarian bearish signal':'Market overleveraged SHORT — contrarian bullish signal'}</div>}
                   </div>
                 ):<p style={{fontSize:11,color:'#787b86'}}>{isCrypto(symbol)?'Loading futures data…':'OI data only for crypto'}</p>}
               </Section>
 
-              <Section title="Intermarket Analysis" icon="🌐" open={false}>
+              <Section title="Intermarket Analysis" icon="🌐" open={false} info="Tracks macro market relationships that drive crypto and stock prices. These external forces can override technical setups — always check macro context before entering trades.">
                 {intermarket?(
                   <div>
                     <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
@@ -1188,7 +1206,7 @@ const App=()=>{
                 ):<p style={{fontSize:11,color:'#787b86'}}>Loading intermarket data…</p>}
               </Section>
 
-              <Section title="Sentiment & Fear/Greed" icon="🧠" open={false}>
+              <Section title="Sentiment & Fear/Greed" icon="🧠" open={false} info="Market emotion indicators. Used as contrarian signals — extreme fear often marks bottoms, extreme greed marks tops. Combined with news NLP sentiment to score overall market mood.">
                 {fearGreed&&(
                   <div style={{marginBottom:8}}>
                     <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 8px',background:'#131722',borderRadius:6,marginBottom:6}}>
@@ -1218,7 +1236,7 @@ const App=()=>{
                 </div>
               </Section>
 
-              <Section title="Signal Breakdown" icon="⚖" open={false}>
+              <Section title="Signal Breakdown" icon="⚖" open={false} info="Shows exactly how the Master Bias Score was calculated. Each row = one module. Bar extends right (green) = bullish contribution, left (red) = bearish. Number = raw score. % = weight in the final calculation. Dominant bars drive the overall signal.">
                 {masterBias&&(<>
                   <div style={{marginBottom:6}}>
                     {masterBias.features.map((f,i)=>(
@@ -1236,71 +1254,71 @@ const App=()=>{
                 </>)}
               </Section>
 
-              <Section title="Next Candle Prediction" icon="🕯">
+              <Section title="Next Candle Prediction" icon="🕯" info="Predicts the likely characteristics of the next candle based on current momentum, EMA alignment, and RSI. The neon yellow candles on the chart show the projected price path. Use the input in the header to control how many future candles to display.">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
-                  <Tile label={`${tf} Type`} value={setup.next_type}/>
-                  <Tile label={`${tf} Direction`} value={setup.next_dir} color={clsDir(setup.next_dir)}/>
-                  <Tile label="Body Size" value={setup.next_size}/>
-                  <Tile label="Confidence" value={setup.confidence}/>
+                  <Tile label={`${tf} Type`} value={setup.next_type} info="Expected candlestick pattern for the next bar. Marubozu = strong directional candle with no wicks. Doji = indecision, market at inflection point. Hammer = bullish reversal signal at lows. Shooting Star = bearish reversal signal at highs."/>
+                  <Tile label={`${tf} Direction`} value={setup.next_dir} color={clsDir(setup.next_dir)} info="Expected direction for the next candle based on the last 3 closes, EMA alignment, and RSI. Bullish = more closing up expected. Bearish = more closing down expected. Not a guaranteed signal — use with HTF bias confirmation."/>
+                  <Tile label="Body Size" value={setup.next_size} info="Predicted candle body size relative to ATR. Large (>2% ATR) = significant move expected, possible breakout or strong trend candle. Medium = normal trending candle. Small (<0.8% ATR) = consolidation or indecision, breakout may follow."/>
+                  <Tile label="Confidence" value={setup.confidence} info="Overall signal confidence. High = bull% above 68 or below 32 (strong directional conviction). Medium = 57–68 or 32–43. Low = 43–57 (conflicting signals, avoid trading). Always wait for High or Medium confidence before entering."/>
                 </div>
               </Section>
 
-              <Section title="Trade Setup" icon="🎯">
+              <Section title="Trade Setup" icon="🎯" info="Complete trade plan calculated from current price, ATR volatility, and signal direction. All levels are dynamically recalculated every 30 seconds. Not financial advice — use as a starting framework only.">
                 <div style={{padding:'4px 8px 8px',background:'#131722',borderRadius:6,marginBottom:6,borderLeft:`3px solid ${setup.signal==='LONG'?'#26a69a':'#ef5350'}`}}>
-                  <p style={{fontSize:10,color:'#787b86',marginBottom:4}}>Entry Zone</p>
+                  <p style={{fontSize:10,color:'#787b86',marginBottom:4}}>Entry Zone <Info text="The optimal price range to enter the trade. For LONG: slightly below current price. For SHORT: slightly above. Entering within this zone gives the best risk-to-reward ratio relative to the calculated stop loss."/></p>
                   <p style={{fontSize:14,fontWeight:700,fontFamily:'monospace',color:'#d1d4dc'}}>{fmt(setup.entry_zone?.[0],dec)} – {fmt(setup.entry_zone?.[1],dec)}</p>
                 </div>
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:4}}>
                   <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #26a69a33'}}>
-                    <p style={{fontSize:10,color:'#26a69a',fontWeight:600}}>TP 1</p>
+                    <p style={{fontSize:10,color:'#26a69a',fontWeight:600,display:'flex',alignItems:'center'}}>TP 1 <Info text="Take Profit 1 — first target at 2× ATR from entry. Higher probability of being reached. Recommended to take 50–70% of position here to lock in profit, then trail stop on remainder."/></p>
                     <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.take_profit_1,dec)}</p>
                     <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr1} R:R</p>
                   </div>
                   <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #2962ff33'}}>
-                    <p style={{fontSize:10,color:'#2962ff',fontWeight:600}}>TP 2</p>
+                    <p style={{fontSize:10,color:'#2962ff',fontWeight:600,display:'flex',alignItems:'center'}}>TP 2 <Info text="Take Profit 2 — extended target at 4× ATR from entry. Lower probability but much higher reward. Only move remaining position here after TP1 is hit and stop is moved to breakeven. Represents the full trend extension."/></p>
                     <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.take_profit_2,dec)}</p>
                     <p style={{fontSize:10,color:'#787b86',marginTop:1}}>{setup.rr2} R:R</p>
                   </div>
                 </div>
                 <div style={{background:'#131722',borderRadius:6,padding:'6px 8px',border:'1px solid #ef535033',marginBottom:4}}>
-                  <p style={{fontSize:10,color:'#ef5350',fontWeight:600}}>Stop Loss</p>
+                  <p style={{fontSize:10,color:'#ef5350',fontWeight:600,display:'flex',alignItems:'center'}}>Stop Loss <Info text="Stop loss at 1.5× ATR below entry (LONG) or above entry (SHORT). Placed beyond normal volatility so random wicks don't stop you out. Never move your stop loss further away — if price reaches it, the setup has failed."/></p>
                   <p style={{fontSize:12,fontFamily:'monospace',color:'#d1d4dc',marginTop:2}}>{fmt(setup.stop_loss,dec)}</p>
                 </div>
                 <div style={{display:'flex',justifyContent:'space-between',padding:'6px 8px',background:'#131722',borderRadius:6}}>
-                  <span style={{fontSize:11,color:'#787b86'}}>Suggested Leverage</span>
+                  <span style={{fontSize:11,color:'#787b86',display:'flex',alignItems:'center'}}>Suggested Leverage <Info text="Recommended futures leverage based on ATR volatility and RSI extremes. Lower leverage in high volatility or overbought/oversold conditions (ATR >2% of price or RSI >70/<30 = 3x). Medium volatility = 5x. Low volatility = up to 10x. Higher leverage = higher liquidation risk."/></span>
                   <span style={{fontSize:11,fontWeight:700,color:'#2962ff'}}>{setup.leverage}x</span>
                 </div>
               </Section>
 
-              <Section title="Key Levels" icon="📍" open={false}>
+              <Section title="Key Levels" icon="📍" open={false} info="Critical price levels where stop-loss orders are clustered. Institutional players hunt these levels to trigger stops before reversing. Knowing these helps you avoid being stopped out and identify high-probability reversal zones.">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
                   <div>
-                    <p style={{fontSize:10,color:'#26a69a',fontWeight:600,padding:'4px 8px'}}>BSL (Stop Hunt↑)</p>
+                    <p style={{fontSize:10,color:'#26a69a',fontWeight:600,padding:'4px 8px',display:'flex',alignItems:'center'}}>BSL (Stop Hunt↑) <Info text="Buy-Side Liquidity — stop-loss orders from short sellers sitting just above recent swing highs. Institutions push price up to grab this liquidity before reversing down. When price wicks above a BSL level and closes back below, it's a high-probability short signal."/></p>
                     {setup.bsl.map((l,i)=><p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>{fmt(l,dec)}</p>)}
                   </div>
                   <div>
-                    <p style={{fontSize:10,color:'#ef5350',fontWeight:600,padding:'4px 8px'}}>SSL (Stop Hunt↓)</p>
+                    <p style={{fontSize:10,color:'#ef5350',fontWeight:600,padding:'4px 8px',display:'flex',alignItems:'center'}}>SSL (Stop Hunt↓) <Info text="Sell-Side Liquidity — stop-loss orders from long buyers sitting just below recent swing lows. Institutions push price down to sweep these stops before reversing up. When price wicks below a SSL level and closes back above, it's a high-probability long signal."/></p>
                     {setup.ssl.map((l,i)=><p key={i} style={{fontSize:11,fontFamily:'monospace',color:'#d1d4dc',padding:'2px 8px'}}>{fmt(l,dec)}</p>)}
                   </div>
                 </div>
                 <div style={{marginTop:8,padding:'6px 8px',background:'#131722',borderRadius:6}}>
                   <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4}}>
-                    <span style={{color:'#787b86'}}>EMA 9</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema9,dec)}</span>
+                    <span style={{color:'#787b86',display:'flex',alignItems:'center'}}>EMA 9 <Info text="9-period Exponential Moving Average — the fastest EMA. Tracks short-term momentum. Price above EMA9 = short-term bullish. Acts as dynamic support in strong uptrends, resistance in downtrends. Crosses with EMA21 give early trend change signals."/></span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema9,dec)}</span>
                   </div>
                   <div style={{display:'flex',justifyContent:'space-between',fontSize:10,marginBottom:4}}>
-                    <span style={{color:'#787b86'}}>EMA 21</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema21,dec)}</span>
+                    <span style={{color:'#787b86',display:'flex',alignItems:'center'}}>EMA 21 <Info text="21-period EMA — medium-term trend filter. Often used as the first major pullback zone in a trend. Price bouncing off EMA21 in an uptrend = high-probability long entry. EMA9 crossing above EMA21 = bullish signal."/></span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema21,dec)}</span>
                   </div>
                   <div style={{display:'flex',justifyContent:'space-between',fontSize:10}}>
-                    <span style={{color:'#787b86'}}>EMA 50</span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema50,dec)}</span>
+                    <span style={{color:'#787b86',display:'flex',alignItems:'center'}}>EMA 50 <Info text="50-period EMA — major trend dividing line. Price above EMA50 = bullish macro environment. Below = bearish. Institutions watch the 50 EMA closely. A cross of EMA9 and EMA21 above EMA50 = strong bullish alignment (Golden Cross setup)."/></span><span style={{color:'#d1d4dc',fontFamily:'monospace'}}>{fmt(setup.ema50,dec)}</span>
                   </div>
                 </div>
               </Section>
 
-              <Section title={`News & Macro Impact${hiCount>0?` 🔴${hiCount}`:''}`} icon="📰" open={true}>
+              <Section title={`News & Macro Impact${hiCount>0?` 🔴${hiCount}`:''}`} icon="📰" open={true} info="Live news aggregated from CNBC, Yahoo Finance, CoinDesk and Google News. Each headline is scored bullish/bearish using keyword NLP. HIGH IMPACT events (red badge) can override technical setups — always check before entering trades.">
                 <NewsPanel nd={nd}/>
               </Section>
 
-              <Section title="Analysis Summary" icon="📋">
+              <Section title="Analysis Summary" icon="📋" info="Quick-reference table combining all key outputs into one place. Use this as a final checklist before executing a trade — check that HTF Bias, Signal, and Confidence all align before entering.">
                 <table className="sum-table"><tbody>
                   <tr><td>Asset</td><td>{symbol}</td></tr>
                   <tr><td>HTF Bias</td><td style={{color:setup.htf_bias==='Bullish'?'#26a69a':setup.htf_bias==='Bearish'?'#ef5350':'#d1d4dc'}}>{setup.htf_bias}</td></tr>
