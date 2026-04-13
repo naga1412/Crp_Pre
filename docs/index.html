@@ -745,6 +745,7 @@ const App=()=>{
   const[futureCount,setFutureCount]=useState('');
   const[mtfVP,setMtfVP]=useState(null);
   const[binanceSymbols,setBinanceSymbols]=useState(CRYPTO_LIST);
+  const[symbolsReady,setSymbolsReady]=useState(false);
   const[oiFunding,setOiFunding]=useState(null);
   const[fearGreed,setFearGreed]=useState(null);
   const[intermarket,setIntermarket]=useState(null);
@@ -754,7 +755,10 @@ const App=()=>{
 
   // Fetch all Binance symbols on mount
   useEffect(()=>{
-    fetchAllBinanceSymbols().then(syms=>{if(syms&&syms.length>10)setBinanceSymbols(syms);});
+    fetchAllBinanceSymbols().then(syms=>{
+      if(syms&&syms.length>10){setBinanceSymbols(syms);}
+      setSymbolsReady(true);
+    }).catch(()=>setSymbolsReady(true));
   },[]);
 
   // Chart init
@@ -1380,17 +1384,31 @@ const App=()=>{
                 onKeyDown={e=>{if(e.key==='Enter'&&filtered.length)selectSym(filtered[0].symbol);if(e.key==='Escape')setShowSearch(false);}}/>
               <button onClick={()=>{setShowSearch(false);setQuery('');setSearchCat('');}} style={{background:'none',border:'none',color:'#787b86',cursor:'pointer',fontSize:16}}>✕</button>
             </div>
-            <div style={{display:'flex',gap:0,padding:'6px 12px',borderBottom:'1px solid #2a2e39',flexWrap:'wrap'}}>
+            <div style={{display:'flex',alignItems:'center',gap:0,padding:'6px 12px',borderBottom:'1px solid #2a2e39',flexWrap:'wrap'}}>
               {[{label:'All',val:''},{label:'Crypto',val:'crypto'},{label:'Stocks',val:'stock'},{label:'ETFs',val:'etf'},{label:'Commodities',val:'commodity'},{label:'Indices',val:'index'}].map(({label,val})=>(
                 <button key={label} style={{padding:'3px 9px',borderRadius:4,border:'none',cursor:'pointer',fontSize:10,marginRight:3,marginBottom:2,background:searchCat===val?'#2962ff':'transparent',color:searchCat===val?'#fff':'#787b86'}} onClick={()=>setSearchCat(val)}>{label}</button>
               ))}
+              <span style={{marginLeft:'auto',fontSize:9,color:symbolsReady?'#26a69a':'#ff9800'}}>
+                {symbolsReady?`✓ ${binanceSymbols.length} coins`:'⏳ Loading coins…'}
+              </span>
             </div>
             <div style={{overflowY:'auto',flex:1}}>
-              {filtered.length===0&&<p style={{padding:16,color:'#787b86',fontSize:12,textAlign:'center'}}>No results found.</p>}
+              {!symbolsReady&&!query&&<p style={{padding:'8px 16px',color:'#ff9800',fontSize:11,textAlign:'center'}}>⏳ Loading all Binance coins — please wait…</p>}
+              {filtered.length===0&&query?(
+                <div style={{padding:16,textAlign:'center'}}>
+                  <p style={{color:'#787b86',fontSize:12,marginBottom:8}}>No results found for "{query}"</p>
+                  {isCrypto(query.toUpperCase()+'/USDT')||query.toUpperCase().endsWith('USDT')||query.length>=2?(
+                    <button onClick={()=>selectSym(query.toUpperCase().includes('/')?query.toUpperCase():query.toUpperCase()+'/USDT')}
+                      style={{background:'#2962ff',border:'none',borderRadius:6,padding:'6px 16px',color:'#fff',cursor:'pointer',fontSize:12,fontWeight:600}}>
+                      Try {query.toUpperCase().includes('/')?query.toUpperCase():query.toUpperCase()+'/USDT'} →
+                    </button>
+                  ):null}
+                </div>
+              ):filtered.length===0?<p style={{padding:16,color:'#787b86',fontSize:12,textAlign:'center'}}>Type a symbol to search…</p>:null}
               {filtered.map(s=>(
                 <div key={s.symbol} className="search-result" onClick={()=>selectSym(s.symbol)}>
                   <span className={`badge badge-${s.type}`}>{s.type.toUpperCase()}</span>
-                  <div style={{flex:1}}><p style={{fontSize:13,fontWeight:600,color:'#d1d4dc'}}>{s.symbol}</p>{s.name&&<p style={{fontSize:11,color:'#787b86'}}>{s.name}</p>}</div>
+                  <div style={{flex:1}}><p style={{fontSize:13,fontWeight:600,color:'#d1d4dc'}}>{s.symbol}</p>{s.name&&s.name!==s.symbol.split('/')[0]&&<p style={{fontSize:11,color:'#787b86'}}>{s.name}</p>}</div>
                   <span style={{fontSize:10,color:'#787b86'}}>{s.exchange}</span>
                 </div>
               ))}
