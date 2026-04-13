@@ -168,6 +168,213 @@ function calcVolumeProfile(candles,numBuckets=100){
   }
   return{poc,vah,val,hvn,lvn,bSz,vols,minP,pocIdx,inVA};
 }
+// ─── MOMENTUM INDICATORS ──────────────────────────────────────────────────────
+function calcMACD(C,fast=12,slow=26,sig=9){
+  const ef=calcEMA(C,fast),es=calcEMA(C,slow);
+  const ml=ef.map((v,i)=>(v!=null&&es[i]!=null)?v-es[i]:null);
+  const valid=ml.filter(v=>v!=null);
+  if(valid.length<sig) return{macd:0,signal:0,hist:0,cross:null,expansion:false};
+  const sl=calcEMA(valid,sig);
+  const hl=sl.map((v,i)=>(v!=null&&valid[i]!=null)?valid[i]-v:null);
+  const lm=ml[ml.length-1]||0,pm=ml[ml.length-2]||0;
+  const ls=sl[sl.length-1]||0,lh=hl[hl.length-1]||0,ph=hl[hl.length-2]||0;
+  return{macd:lm,signal:ls,hist:lh,prevHist:ph,cross:lm>ls&&pm<=ls?'bull':lm<ls&&pm>=ls?'bear':null,expansion:Math.abs(lh)>Math.abs(ph)};
+}
+function calcStochRSI(C,per=14,sk=3,sd=3){
+  const rsi=calcRSI(C,per);
+  const sr=[];
+  for(let i=per;i<rsi.length;i++){const w=rsi.slice(i-per,i);const mn=Math.min(...w),mx=Math.max(...w);sr.push(mx-mn<1e-9?0.5:(rsi[i]-mn)/(mx-mn));}
+  const smK=[];for(let i=sk-1;i<sr.length;i++) smK.push(sr.slice(i-sk+1,i+1).reduce((a,b)=>a+b,0)/sk);
+  const smD=[];for(let i=sd-1;i<smK.length;i++) smD.push(smK.slice(i-sd+1,i+1).reduce((a,b)=>a+b,0)/sd);
+  return{k:(smK[smK.length-1]||0.5)*100,d:(smD[smD.length-1]||0.5)*100};
+}
+function calcCMF(candles,per=20){
+  if(candles.length<per) return 0;
+  let mfv=0,vol=0;
+  for(const c of candles.slice(-per)){const hl=c.high-c.low||1;const mfm=((c.close-c.low)-(c.high-c.close))/hl;mfv+=mfm*(c.volume||0);vol+=c.volume||0;}
+  return vol>0?mfv/vol:0;
+}
+function calcBB(C,per=20,mult=2){
+  if(C.length<per) return null;
+  const r=C.slice(-per);const mid=r.reduce((a,b)=>a+b,0)/per;
+  const std=Math.sqrt(r.reduce((a,b)=>a+(b-mid)**2,0)/per);
+  return{upper:mid+mult*std,middle:mid,lower:mid-mult*std,bandwidth:(mult*2*std)/mid};
+}
+function calcKeltner(candles,per=20,mult=1.5){
+  if(candles.length<per) return null;
+  const C=candles.map(c=>c.close);const ema=calcEMA(C,per);const mid=ema[ema.length-1];
+  const atrA=calcATR(candles.map(c=>c.high),candles.map(c=>c.low),C,per);const atr=atrA[atrA.length-1];
+  return{upper:mid+mult*atr,middle:mid,lower:mid-mult*atr,atr};
+}
+function detectRSIDivergence(C,rsi){
+  if(C.length<12||rsi.length<12) return null;
+  const pc=C.slice(-12),rc=rsi.slice(-12);
+  const pPrev=pc.slice(0,6),pLast=pc.slice(6);
+  const rPrev=rc.slice(0,6),rLast=rc.slice(6);
+  const pH=Math.max(...pPrev),pL=Math.min(...pPrev),rH=Math.max(...rPrev),rL=Math.min(...rPrev);
+  const cpH=Math.max(...pLast),cpL=Math.min(...pLast),crH=Math.max(...rLast),crL=Math.min(...rLast);
+  if(cpH>pH&&crH<rH) return 'bearish_regular';
+  if(cpL<pL&&crL>rL) return 'bullish_regular';
+  if(cpH<pH&&crH>rH) return 'bullish_hidden';
+  if(cpL>pL&&crL<rL) return 'bearish_hidden';
+  return null;
+}
+// ─── MARKET MICROSTRUCTURE ────────────────────────────────────────────────────
+function calcDelta(candles){
+  return candles.map(c=>{
+    const rng=c.high-c.low||1;
+    const buyF=(c.close-c.low)/rng;
+    return{buy:c.volume*buyF,sell:c.volume*(1-buyF),delta:c.volume*(2*buyF-1),total:c.volume||0};
+  });
+}
+function detectAbsorption(candles,atrVal){
+  const vols=candles.map(c=>c.volume||0);
+  const avg=vols.reduce((a,b)=>a+b,0)/vols.length||1;
+  return candles.map((c,i)=>((c.volume||0)>avg*2&&(c.high-c.low)<atrVal*0.5)?{price:(c.high+c.low)/2,idx:i,strength:(c.volume||0)/avg}:null).filter(Boolean);
+}
+function detectLiquidityGrabs(candles,levels){
+  const g=[];
+  for(let i=2;i<candles.length;i++){
+    const c=candles[i],p=candles[i-1];
+    for(const lv of levels){
+      if(c.high>lv&&c.close<lv&&c.close<p.close) g.push({idx:i,price:lv,type:'bear'});
+      if(c.low<lv&&c.close>lv&&c.close>p.close) g.push({idx:i,price:lv,type:'bull'});
+    }
+  }
+  return g.slice(-5);
+}
+function calcBVIXProxy(candles,per=14){
+  const a=calcATR(candles.map(c=>c.high),candles.map(c=>c.low),candles.map(c=>c.close),per);
+  return ((a[a.length-1]||0)/(candles[candles.length-1]?.close||1))*100;
+}
+// ─── SCORING ENGINES ──────────────────────────────────────────────────────────
+function calcMomentumScore(candles){
+  if(!candles||candles.length<55) return{score:0,signals:{}};
+  const C=candles.map(c=>c.close);
+  const rsi=calcRSI(C,14);const lRSI=rsi[rsi.length-1]||50;
+  const macd=calcMACD(C);const stoch=calcStochRSI(C);const cmf=calcCMF(candles);
+  const bb=calcBB(C);const klt=calcKeltner(candles);const div=detectRSIDivergence(C,rsi);
+  let sc=0;
+  const rsiSc=lRSI>70?-15:lRSI<30?15:lRSI>55?8:lRSI<45?-8:0; sc+=rsiSc;
+  if(div==='bullish_regular'||div==='bullish_hidden') sc+=15;
+  if(div==='bearish_regular'||div==='bearish_hidden') sc-=15;
+  const mSc=macd.cross==='bull'?15:macd.cross==='bear'?-15:macd.hist>0&&macd.expansion?8:macd.hist<0&&macd.expansion?-8:macd.hist>0?4:macd.hist<0?-4:0; sc+=mSc;
+  const sSc=stoch.k<20?10:stoch.k>80?-10:stoch.k>stoch.d?4:-4; sc+=sSc;
+  const cSc=cmf>0.05?10:cmf<-0.05?-10:cmf>0?4:-4; sc+=cSc;
+  let squeeze=false;
+  if(bb&&klt) squeeze=bb.upper<klt.upper&&bb.lower>klt.lower;
+  return{score:Math.max(-100,Math.min(100,sc)),bb,klt,squeeze,signals:{
+    rsi:{value:lRSI.toFixed(1),score:rsiSc,divergence:div},
+    macd:{value:macd.macd?.toFixed(5),hist:macd.hist?.toFixed(5),cross:macd.cross,score:mSc},
+    stoch:{k:stoch.k.toFixed(1),d:stoch.d.toFixed(1),score:sSc},
+    cmf:{value:cmf.toFixed(3),score:cSc},
+    bb:{bandwidth:bb?.bandwidth?.toFixed(4),squeeze}
+  }};
+}
+function calcMicrostructureScore(candles){
+  if(!candles||candles.length<20) return{score:0,signals:{}};
+  const atrA=calcATR(candles.map(c=>c.high),candles.map(c=>c.low),candles.map(c=>c.close),14);
+  const atr=atrA[atrA.length-1]||1;
+  const deltas=calcDelta(candles);
+  const cums=[];let cum=0;deltas.forEach(d=>{cum+=d.delta;cums.push(cum);});
+  const rc=candles.map(c=>c.close).slice(-10),rd=cums.slice(-10);
+  const priceUp=rc[9]>rc[0],deltaUp=rd[9]>rd[0];
+  const cdDiv=priceUp!==deltaUp;
+  const last5=deltas.slice(-5);
+  const buyP=last5.reduce((a,b)=>a+b.buy,0),sellP=last5.reduce((a,b)=>a+b.sell,0);
+  const dom=buyP>sellP*1.2?'buy':sellP>buyP*1.2?'sell':'neutral';
+  const absorb=detectAbsorption(candles.slice(-30),atr);
+  const bvix=calcBVIXProxy(candles);
+  let sc=0;
+  if(dom==='buy') sc+=20;else if(dom==='sell') sc-=20;
+  if(cdDiv&&priceUp) sc-=15;else if(cdDiv&&!priceUp) sc+=15;
+  if(absorb.length>0) sc+=5;
+  return{score:Math.max(-100,Math.min(100,sc)),absorb,bvix,signals:{dominance:dom,cdDivergence:cdDiv,cdDir:priceUp?'price↑/delta↓':'price↓/delta↑',absorptionZones:absorb.length,bvix:bvix.toFixed(2)}};
+}
+function calcLiquidityMap(candles){
+  if(!candles||candles.length<20) return{clusters:[],grabs:[],bsl:[],ssl:[]};
+  const H=candles.map(c=>c.high),L=candles.map(c=>c.low);
+  const sw=detectSwings(H,L);
+  const bsl=sw.sh.map(s=>s.price),ssl=sw.sl.map(s=>s.price);
+  const grabs=detectLiquidityGrabs(candles.slice(-50),[...bsl,...ssl]);
+  return{bsl,ssl,grabs,clusters:[...bsl.map(p=>({price:p,type:'bsl'})),...ssl.map(p=>({price:p,type:'ssl'}))]};
+}
+function calcOIScore(oiData,candles){
+  if(!oiData) return{score:0,signal:'No OI Data',fundingSignal:'—'};
+  const fr=oiData.fundingRate;
+  let sc=0;
+  const fsig=fr==null?'—':fr>0.001?'Overleveraged Long':fr<-0.001?'Overleveraged Short':fr>0.0003?'Slight Long Bias':fr<-0.0003?'Slight Short Bias':'Neutral';
+  if(fr!=null){if(fr>0.001)sc-=20;else if(fr<-0.001)sc+=20;else if(fr>0.0003)sc-=10;else if(fr<-0.0003)sc+=10;}
+  return{score:Math.max(-100,Math.min(100,sc)),signal:'Futures',fundingSignal:fsig,fundingRate:fr,openInterest:oiData.openInterest};
+}
+function calcIntermarketScore(im,crypto){
+  if(!im) return{score:0,signals:{}};
+  const{dxyChg,spxChg,goldChg,btcDom}=im;let sc=0;
+  if(crypto){if(dxyChg!=null)sc+=(dxyChg>0.3?-10:dxyChg<-0.3?10:0);if(spxChg!=null)sc+=(spxChg>0.5?10:spxChg<-0.5?-10:0);}
+  else{if(dxyChg!=null)sc+=(dxyChg>0.3?-5:dxyChg<-0.3?5:0);if(spxChg!=null)sc+=(spxChg>0.5?15:spxChg<-0.5?-15:0);}
+  return{score:Math.max(-50,Math.min(50,sc)),signals:{dxyChg,spxChg,goldChg,btcDom}};
+}
+function calcSentimentScore(fg,nd){
+  let sc=0;
+  if(fg?.value!=null){if(fg.value<=25)sc+=20;else if(fg.value>=75)sc-=20;else if(fg.value<=40)sc+=10;else if(fg.value>=60)sc-=10;}
+  if(nd){const{bullish=0,bearish=0}=nd.overall_sentiment||{};const tot=bullish+bearish||1;sc+=Math.max(-10,Math.min(10,(bullish-bearish)/tot*10));}
+  return{score:Math.max(-50,Math.min(50,sc))};
+}
+function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price){
+  if(!setup) return null;
+  const bPct=setup.bull_pct||50;
+  const smcRaw=(bPct-50)*2;
+  const wPhase={'Markup':30,'Accumulation':15,'Distribution':-15,'Markdown':-30};
+  const wyRaw=wPhase[setup.phase]||0;
+  let vpRaw=0;
+  if(mtfVP&&price!=null){const W={'1w':40,'1d':30,'4h':20,'1h':10};let ws=0,wt=0;for(const[t,w]of Object.entries(W)){const vp=mtfVP[t];if(vp){wt+=w;ws+=(price>vp.poc?w:-w*0.5);}}if(wt>0)vpRaw=Math.round(ws/wt*100);}
+  const features=[
+    {n:'SMC',v:smcRaw,w:0.20},{n:'Wyckoff',v:wyRaw,w:0.10},{n:'VP',v:vpRaw,w:0.10},
+    {n:'OI/Funding',v:oiSig?.score||0,w:0.10},{n:'Momentum',v:momSig?.score||0,w:0.10},
+    {n:'Microstructure',v:microSig?.score||0,w:0.10},{n:'Sentiment',v:sentSig?.score||0,w:0.05},
+    {n:'Intermarket',v:imSig?.score||0,w:0.05},
+  ];
+  const weighted=features.reduce((a,f)=>a+f.v*f.w,0);
+  const mlBoost=weighted*0.10;
+  const master=Math.max(-100,Math.min(100,weighted+mlBoost));
+  const mlConf=Math.round(Math.min(100,50+Math.abs(weighted)/2));
+  const label=master>60?'Strong Bullish':master>30?'Bullish':master<-60?'Strong Bearish':master<-30?'Bearish':'Neutral';
+  const color=master>30?'#26a69a':master<-30?'#ef5350':'#787b86';
+  return{score:Math.round(master),label,color,mlConf,features:features.sort((a,b)=>Math.abs(b.v*b.w)-Math.abs(a.v*a.w))};
+}
+// ─── FUTURES & SENTIMENT DATA ─────────────────────────────────────────────────
+async function fetchOIandFunding(symbol){
+  if(!isCrypto(symbol)) return null;
+  const sym=symbol.replace('/','');
+  try{
+    const[oiR,frR]=await Promise.allSettled([
+      fetch(`https://fapi.binance.com/fapi/v1/openInterest?symbol=${sym}`),
+      fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${sym}&limit=3`)
+    ]);
+    const oi=oiR.status==='fulfilled'&&oiR.value.ok?await oiR.value.json():null;
+    const fr=frR.status==='fulfilled'&&frR.value.ok?await frR.value.json():null;
+    return{openInterest:oi?parseFloat(oi.openInterest):null,fundingRate:fr&&fr.length?parseFloat(fr[fr.length-1].fundingRate):null};
+  }catch(_){return null;}
+}
+async function fetchFearGreed(){
+  try{
+    const r=await fetch('https://api.alternative.me/fng/?limit=2');
+    if(!r.ok) return null;
+    const d=await r.json();
+    const[now,prev]=d.data||[];
+    return{value:parseInt(now?.value||50),label:now?.value_classification||'Neutral',previous:parseInt(prev?.value||50)};
+  }catch(_){return null;}
+}
+async function fetchIntermarketData(cryptoAsset){
+  try{
+    const jobs=[fetchYF('DX-Y.NYB','1d',5),fetchYF('^GSPC','1d',5),fetchYF('GC=F','1d',5)];
+    if(cryptoAsset) jobs.push(fetch('https://api.coingecko.com/api/v3/global').then(r=>r.json()).catch(()=>null));
+    const res=await Promise.allSettled(jobs);
+    const chg=(r)=>{if(r.status!=='fulfilled'||!r.value?.length)return null;const d=r.value;const c=d[d.length-1]?.close,p=d[d.length-2]?.close;return c&&p?((c-p)/p*100):null;};
+    const btcDom=cryptoAsset&&res[3]?.status==='fulfilled'?res[3].value?.data?.market_cap_percentage?.btc:null;
+    return{dxyChg:chg(res[0]),spxChg:chg(res[1]),goldChg:chg(res[2]),btcDom:btcDom?parseFloat(btcDom).toFixed(1):null};
+  }catch(_){return null;}
+}
 function futureCandlesSim(candles,signal,atr,count){
   let p=candles[candles.length-1].close;
   return Array.from({length:count},(_,i)=>{
@@ -503,6 +710,9 @@ const App=()=>{
   const[prevClose,setPrevClose]=useState(null);
   const[futureCount,setFutureCount]=useState('');
   const[mtfVP,setMtfVP]=useState(null);
+  const[oiFunding,setOiFunding]=useState(null);
+  const[fearGreed,setFearGreed]=useState(null);
+  const[intermarket,setIntermarket]=useState(null);
 
   const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]),vpCanvasRef=useRef(null);
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
@@ -633,6 +843,26 @@ const App=()=>{
     loadMTFVP(symbol);
   },[symbol]);
 
+  // Fundamentals: OI/Funding + Fear&Greed + Intermarket
+  const loadFundamentals=useCallback(async(sym)=>{
+    const crypto=isCrypto(sym);
+    const[oi,fg,im]=await Promise.allSettled([
+      fetchOIandFunding(sym),
+      fetchFearGreed(),
+      fetchIntermarketData(crypto)
+    ]);
+    if(oi.status==='fulfilled') setOiFunding(oi.value);
+    if(fg.status==='fulfilled') setFearGreed(fg.value);
+    if(im.status==='fulfilled') setIntermarket(im.value);
+  },[]);
+
+  useEffect(()=>{
+    setOiFunding(null);setFearGreed(null);setIntermarket(null);
+    loadFundamentals(symbol);
+    const id=setInterval(()=>loadFundamentals(symbol),120000);
+    return()=>clearInterval(id);
+  },[symbol]);
+
   // News: fetch fresh headlines, merge into 200-item rolling store, refresh every 60s
   useEffect(()=>{
     newsStore.current=[]; // reset store when symbol changes
@@ -710,6 +940,13 @@ const App=()=>{
     }catch(_){}
   },[setup,candles]);
 
+  const momentumSig=useMemo(()=>calcMomentumScore(candles),[candles]);
+  const microSig=useMemo(()=>calcMicrostructureScore(candles),[candles]);
+  const liqMap=useMemo(()=>calcLiquidityMap(candles),[candles]);
+  const oiSig=useMemo(()=>calcOIScore(oiFunding,candles),[oiFunding,candles]);
+  const imSig=useMemo(()=>calcIntermarketScore(intermarket,isCrypto(symbol)),[intermarket,symbol]);
+  const sentSig=useMemo(()=>calcSentimentScore(fearGreed,nd),[fearGreed,nd]);
+
   const filtered=useMemo(()=>{
     const q=(query||'').toUpperCase().trim();
     let pool=searchCat?ALL_SYMBOLS.filter(s=>s.type===searchCat):ALL_SYMBOLS;
@@ -744,6 +981,8 @@ const App=()=>{
     const pct=Math.round(50+score/total*50);
     return{pct:Math.max(0,Math.min(100,pct)),label:pct>65?'Bullish':pct<35?'Bearish':'Neutral'};
   },[mtfVP,price]);
+
+  const masterBias=useMemo(()=>calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price),[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price]);
 
   return(
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'#131722'}}>
@@ -799,6 +1038,35 @@ const App=()=>{
                 <span className={setup.signal==='LONG'?'pulse-bull':'pulse-bear'} style={{padding:'4px 14px',borderRadius:20,fontSize:12,fontWeight:700,background:setup.signal==='LONG'?'#26a69a22':'#ef535022',color:setup.signal==='LONG'?'#26a69a':'#ef5350',border:`1px solid ${setup.signal==='LONG'?'#26a69a55':'#ef535055'}`}}>{setup.signal}</span>
               </div>
 
+              {masterBias&&(
+                <div style={{margin:'0 0 8px',padding:'10px 12px',background:'#131722',borderRadius:8,border:`2px solid ${masterBias.color}44`}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
+                    <span style={{fontSize:11,color:'#787b86',fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px'}}>Master Bias Score</span>
+                    <span style={{fontSize:11,fontWeight:700,color:masterBias.color,background:masterBias.color+'18',padding:'2px 10px',borderRadius:10,border:`1px solid ${masterBias.color}44`}}>{masterBias.label}</span>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                    <span style={{fontSize:22,fontWeight:800,color:masterBias.color,fontFamily:'monospace',minWidth:52}}>{masterBias.score>0?'+':''}{masterBias.score}</span>
+                    <div style={{flex:1}}>
+                      <div style={{height:8,background:'#2a2e39',borderRadius:4,overflow:'hidden',position:'relative'}}>
+                        <div style={{position:'absolute',left:'50%',top:0,width:2,height:'100%',background:'#2a2e39',zIndex:1}}/>
+                        <div style={{position:'absolute',left:masterBias.score>=0?'50%':'calc(50% + '+masterBias.score/2+'%)',width:Math.abs(masterBias.score)/2+'%',height:'100%',background:masterBias.color,borderRadius:4}}/>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#787b86',marginTop:2}}>
+                        <span>-100 Strong Bear</span><span>0 Neutral</span><span>+100 Strong Bull</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:10,color:'#787b86'}}>ML Confidence</span>
+                    <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden'}}>
+                      <div style={{width:masterBias.mlConf+'%',height:'100%',background:masterBias.mlConf>75?'#26a69a':masterBias.mlConf>50?'#ff9800':'#ef5350',borderRadius:2}}/>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:700,color:masterBias.mlConf>75?'#26a69a':masterBias.mlConf>50?'#ff9800':'#ef5350'}}>{masterBias.mlConf}%</span>
+                  </div>
+                  {masterBias.mlConf>=75&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ High-probability setup</p>}
+                </div>
+              )}
+
               <Section title="HTF Bias & Structure" icon="📊">
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
                   <Tile label="HTF Bias" value={setup.htf_bias} color={clsDir(setup.htf_bias)}/>
@@ -848,6 +1116,124 @@ const App=()=>{
                   </div>
                 )}
                 {!setup.vp_poc&&!mtfVPScore&&<p style={{fontSize:11,color:'#787b86'}}>Loading VP…</p>}
+              </Section>
+
+              <Section title="Momentum Indicators" icon="📈" open={false}>
+                {momentumSig&&(<>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
+                    <Tile label="RSI (14)" value={momentumSig.signals.rsi?.value} color={+momentumSig.signals.rsi?.value>70?'text-bear':+momentumSig.signals.rsi?.value<30?'text-bull':'text-white'}/>
+                    <Tile label="MACD" value={momentumSig.signals.macd?.cross?momentumSig.signals.macd.cross==='bull'?'Bullish Cross':'Bearish Cross':momentumSig.signals.macd?.hist>0?'Bullish':'Bearish'} color={momentumSig.signals.macd?.hist>0?'text-bull':'text-bear'}/>
+                    <Tile label="Stoch RSI K" value={momentumSig.signals.stoch?.k} color={+momentumSig.signals.stoch?.k<20?'text-bull':+momentumSig.signals.stoch?.k>80?'text-bear':'text-white'}/>
+                    <Tile label="CMF (20)" value={momentumSig.signals.cmf?.value} color={+momentumSig.signals.cmf?.value>0?'text-bull':'text-bear'}/>
+                  </div>
+                  {momentumSig.signals.rsi?.divergence&&<div style={{padding:'4px 8px',background:'#ff980018',borderRadius:4,border:'1px solid #ff980044',fontSize:10,color:'#ff9800',marginBottom:4}}>⚡ RSI {momentumSig.signals.rsi.divergence.replace('_',' ')} divergence</div>}
+                  {momentumSig.signals.bb?.squeeze&&<div style={{padding:'4px 8px',background:'#2962ff18',borderRadius:4,border:'1px solid #2962ff44',fontSize:10,color:'#2962ff',marginBottom:4}}>🔴 BB Squeeze inside Keltner — breakout imminent</div>}
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'4px 4px 0'}}>
+                    <span style={{fontSize:10,color:'#787b86'}}>Momentum Score</span>
+                    <span style={{fontSize:11,fontWeight:700,color:momentumSig.score>0?'#26a69a':momentumSig.score<0?'#ef5350':'#787b86'}}>{momentumSig.score>0?'+':''}{momentumSig.score}</span>
+                  </div>
+                </>)}
+              </Section>
+
+              <Section title="Market Microstructure" icon="🔬" open={false}>
+                {microSig&&(<>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
+                    <Tile label="Order Flow" value={microSig.signals.dominance==='buy'?'Buy Dominant':microSig.signals.dominance==='sell'?'Sell Dominant':'Balanced'} color={microSig.signals.dominance==='buy'?'text-bull':microSig.signals.dominance==='sell'?'text-bear':'text-white'}/>
+                    <Tile label="BVIX Proxy" value={microSig.bvix+'%'} color={microSig.bvix>5?'text-yellow-400':'text-white'}/>
+                    <Tile label="Absorption Zones" value={microSig.signals.absorptionZones} color={microSig.signals.absorptionZones>0?'text-yellow-400':'text-white'}/>
+                    <Tile label="Delta Div" value={microSig.signals.cdDivergence?microSig.signals.cdDir:'None'} color={microSig.signals.cdDivergence?'text-yellow-400':'text-white'}/>
+                  </div>
+                  {microSig.signals.cdDivergence&&<div style={{padding:'4px 8px',background:'#ff980018',borderRadius:4,border:'1px solid #ff980044',fontSize:10,color:'#ff9800',marginBottom:4}}>⚠ Cumulative delta divergence — {microSig.signals.cdDir}</div>}
+                  {liqMap?.grabs?.length>0&&<div style={{padding:'4px 8px',background:'#ef535018',borderRadius:4,border:'1px solid #ef535044',fontSize:10,color:'#ef5350',marginBottom:4}}>⚡ {liqMap.grabs.length} liquidity grab(s) detected</div>}
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'4px 4px 0',fontSize:10}}>
+                    <span style={{color:'#787b86'}}>Microstructure Score</span>
+                    <span style={{fontWeight:700,color:microSig.score>0?'#26a69a':microSig.score<0?'#ef5350':'#787b86'}}>{microSig.score>0?'+':''}{microSig.score}</span>
+                  </div>
+                </>)}
+              </Section>
+
+              <Section title="OI & Funding Rate" icon="📊" open={false}>
+                {oiFunding?(
+                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4}}>
+                    <Tile label="Open Interest" value={oiFunding.openInterest?Number(oiFunding.openInterest).toLocaleString(undefined,{notation:'compact',maximumFractionDigits:2}):'—'}/>
+                    <Tile label="Funding Rate" value={oiFunding.fundingRate!=null?(oiFunding.fundingRate*100).toFixed(4)+'%':'—'} color={oiFunding.fundingRate>0.001?'text-bear':oiFunding.fundingRate<-0.001?'text-bull':'text-white'}/>
+                    <div style={{gridColumn:'1/-1',padding:'4px 8px',background:'#131722',borderRadius:4,fontSize:10,color:'#787b86'}}>{oiSig?.fundingSignal||'—'}</div>
+                    {oiFunding.fundingRate!=null&&Math.abs(oiFunding.fundingRate)>0.001&&<div style={{gridColumn:'1/-1',padding:'4px 8px',background:oiFunding.fundingRate>0?'#ef535018':'#26a69a18',borderRadius:4,border:`1px solid ${oiFunding.fundingRate>0?'#ef535044':'#26a69a44'}`,fontSize:10,color:oiFunding.fundingRate>0?'#ef5350':'#26a69a'}}>⚡ {oiFunding.fundingRate>0.001?'Market overleveraged LONG — contrarian bearish signal':'Market overleveraged SHORT — contrarian bullish signal'}</div>}
+                  </div>
+                ):<p style={{fontSize:11,color:'#787b86'}}>{isCrypto(symbol)?'Loading futures data…':'OI data only for crypto'}</p>}
+              </Section>
+
+              <Section title="Intermarket Analysis" icon="🌐" open={false}>
+                {intermarket?(
+                  <div>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:4,marginBottom:6}}>
+                      {[['DXY',intermarket.dxyChg,true],['SPX',intermarket.spxChg,false],['Gold',intermarket.goldChg,false],['BTC.D',intermarket.btcDom?parseFloat(intermarket.btcDom).toFixed(1)+'%':null,false]].map(([label,val,inv])=>(
+                        <div key={label} style={{background:'#131722',borderRadius:4,padding:'5px 8px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                          <span style={{fontSize:10,color:'#787b86'}}>{label}</span>
+                          {val!=null?<span style={{fontSize:10,fontWeight:600,color:label==='BTC.D'?'#787b86':(typeof val==='number'?(inv?val<0:'#26a69a'?val>0:val<0):false)?'#26a69a':'#ef5350'}}>
+                            {typeof val==='number'?(val>0?'+':'')+val.toFixed(2)+'%':val}
+                          </span>:<span style={{fontSize:10,color:'#787b86'}}>—</span>}
+                        </div>
+                      ))}
+                    </div>
+                    {isCrypto(symbol)&&intermarket.dxyChg!=null&&(<div style={{padding:'4px 8px',background:'#131722',borderRadius:4,fontSize:10,color:'#787b86',marginBottom:4}}>
+                      DXY {intermarket.dxyChg>0.3?'rising → bearish crypto pressure':intermarket.dxyChg<-0.3?'falling → bullish tailwind':'neutral'}
+                      {intermarket.spxChg!=null&&` · SPX ${intermarket.spxChg>0.5?'risk-on ↑':intermarket.spxChg<-0.5?'risk-off ↓':'flat'}`}
+                    </div>)}
+                    <div style={{display:'flex',justifyContent:'space-between',padding:'4px 4px 0',fontSize:10}}>
+                      <span style={{color:'#787b86'}}>Intermarket Score</span>
+                      <span style={{fontWeight:700,color:imSig?.score>0?'#26a69a':imSig?.score<0?'#ef5350':'#787b86'}}>{imSig?.score>0?'+':''}{imSig?.score||0}</span>
+                    </div>
+                  </div>
+                ):<p style={{fontSize:11,color:'#787b86'}}>Loading intermarket data…</p>}
+              </Section>
+
+              <Section title="Sentiment & Fear/Greed" icon="🧠" open={false}>
+                {fearGreed&&(
+                  <div style={{marginBottom:8}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 8px',background:'#131722',borderRadius:6,marginBottom:6}}>
+                      <div style={{width:36,height:36,borderRadius:'50%',background:fearGreed.value<=25?'#26a69a22':fearGreed.value>=75?'#ef535022':'#ff980022',border:`2px solid ${fearGreed.value<=25?'#26a69a':fearGreed.value>=75?'#ef5350':'#ff9800'}`,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                        <span style={{fontSize:14,fontWeight:800,color:fearGreed.value<=25?'#26a69a':fearGreed.value>=75?'#ef5350':'#ff9800'}}>{fearGreed.value}</span>
+                      </div>
+                      <div>
+                        <p style={{fontSize:12,fontWeight:700,color:'#d1d4dc'}}>{fearGreed.label}</p>
+                        <p style={{fontSize:10,color:'#787b86'}}>Fear & Greed Index · prev: {fearGreed.previous}</p>
+                      </div>
+                      <div style={{marginLeft:'auto'}}>
+                        {fearGreed.value<=25&&<span style={{fontSize:10,color:'#26a69a',fontWeight:600}}>Contrarian Bull</span>}
+                        {fearGreed.value>=75&&<span style={{fontSize:10,color:'#ef5350',fontWeight:600}}>Contrarian Bear</span>}
+                      </div>
+                    </div>
+                    <div style={{height:6,background:'linear-gradient(90deg,#26a69a,#ff9800,#ef5350)',borderRadius:3,position:'relative',marginBottom:4}}>
+                      <div style={{position:'absolute',left:`${fearGreed.value}%`,top:-2,width:10,height:10,background:'#fff',borderRadius:'50%',transform:'translateX(-50%)',border:'2px solid #131722'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#787b86'}}>
+                      <span>0 Extreme Fear</span><span>50</span><span>100 Extreme Greed</span>
+                    </div>
+                  </div>
+                )}
+                <div style={{display:'flex',justifyContent:'space-between',padding:'4px 4px 0',fontSize:10}}>
+                  <span style={{color:'#787b86'}}>Sentiment Score</span>
+                  <span style={{fontWeight:700,color:sentSig?.score>0?'#26a69a':sentSig?.score<0?'#ef5350':'#787b86'}}>{sentSig?.score>0?'+':''}{sentSig?.score||0}</span>
+                </div>
+              </Section>
+
+              <Section title="Signal Breakdown" icon="⚖" open={false}>
+                {masterBias&&(<>
+                  <div style={{marginBottom:6}}>
+                    {masterBias.features.map((f,i)=>(
+                      <div key={i} style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+                        <span style={{fontSize:10,color:'#787b86',minWidth:90,whiteSpace:'nowrap'}}>{f.n}</span>
+                        <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden',position:'relative'}}>
+                          <div style={{position:'absolute',left:'50%',top:0,width:1,height:'100%',background:'#2a2e3988'}}/>
+                          <div style={{position:'absolute',left:f.v>=0?'50%':`${50+f.v/2}%`,width:`${Math.abs(f.v)/2}%`,height:'100%',background:f.v>0?'#26a69a':'#ef5350',borderRadius:2}}/>
+                        </div>
+                        <span style={{fontSize:10,fontWeight:600,color:f.v>0?'#26a69a':f.v<0?'#ef5350':'#787b86',minWidth:32,textAlign:'right'}}>{f.v>0?'+':''}{Math.round(f.v)}</span>
+                        <span style={{fontSize:9,color:'#787b86',minWidth:28}}>{Math.round(f.w*100)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </>)}
               </Section>
 
               <Section title="Next Candle Prediction" icon="🕯">
