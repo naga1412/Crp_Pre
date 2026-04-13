@@ -621,6 +621,22 @@ const STOCK_LIST=[
   {symbol:'^DJI',name:'Dow Jones Industrial',exchange:'INDEX',type:'index'},{symbol:'^VIX',name:'CBOE Volatility Index',exchange:'INDEX',type:'index'},
 ];
 const ALL_SYMBOLS=[...CRYPTO_LIST,...STOCK_LIST];
+// Build a name lookup from the hardcoded list so we can enrich dynamic symbols
+const KNOWN_NAMES={};
+CRYPTO_LIST.forEach(c=>{const b=c.symbol.split('/')[0];KNOWN_NAMES[b]=c.name;});
+
+async function fetchAllBinanceSymbols(){
+  try{
+    const r=await fetch('https://api.binance.com/api/v3/exchangeInfo');
+    if(!r.ok) return null;
+    const d=await r.json();
+    const usdt=d.symbols
+      .filter(s=>s.status==='TRADING'&&s.quoteAsset==='USDT')
+      .map(s=>({symbol:s.baseAsset+'/USDT',name:KNOWN_NAMES[s.baseAsset]||s.baseAsset,exchange:'Binance',type:'crypto'}))
+      .sort((a,b)=>a.symbol.localeCompare(b.symbol));
+    return usdt;
+  }catch(_){return null;}
+}
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function smartDec(p){if(!p||p<=0)return 2;if(p<0.0001)return 8;if(p<0.01)return 6;if(p<1)return 4;if(p<100)return 3;if(p<10000)return 2;return 1;}
@@ -728,12 +744,18 @@ const App=()=>{
   const[prevClose,setPrevClose]=useState(null);
   const[futureCount,setFutureCount]=useState('');
   const[mtfVP,setMtfVP]=useState(null);
+  const[binanceSymbols,setBinanceSymbols]=useState(CRYPTO_LIST);
   const[oiFunding,setOiFunding]=useState(null);
   const[fearGreed,setFearGreed]=useState(null);
   const[intermarket,setIntermarket]=useState(null);
 
   const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]),vpCanvasRef=useRef(null);
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
+
+  // Fetch all Binance symbols on mount
+  useEffect(()=>{
+    fetchAllBinanceSymbols().then(syms=>{if(syms&&syms.length>10)setBinanceSymbols(syms);});
+  },[]);
 
   // Chart init
   useEffect(()=>{
@@ -967,10 +989,11 @@ const App=()=>{
 
   const filtered=useMemo(()=>{
     const q=(query||'').toUpperCase().trim();
-    let pool=searchCat?ALL_SYMBOLS.filter(s=>s.type===searchCat):ALL_SYMBOLS;
+    const allPool=[...binanceSymbols,...STOCK_LIST];
+    let pool=searchCat?allPool.filter(s=>s.type===searchCat):allPool;
     if(!q)return pool.slice(0,120);
     return pool.filter(s=>s.symbol.toUpperCase().includes(q)||s.name?.toUpperCase().includes(q)).slice(0,120);
-  },[query,searchCat]);
+  },[query,searchCat,binanceSymbols]);
 
   const selectSym=s=>{setShowSearch(false);setQuery('');setSearchCat('');setSymbol(s);};
   const changeTf=t=>{setTf(t);load(symbol,t);};
