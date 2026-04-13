@@ -627,14 +627,14 @@ CRYPTO_LIST.forEach(c=>{const b=c.symbol.split('/')[0];KNOWN_NAMES[b]=c.name;});
 
 async function fetchAllBinanceSymbols(){
   try{
-    const r=await fetch('https://api.binance.com/api/v3/exchangeInfo');
+    // ticker/price is ~150KB vs exchangeInfo ~3MB — much faster
+    const r=await fetch('https://api.binance.com/api/v3/ticker/price');
     if(!r.ok) return null;
     const d=await r.json();
-    const usdt=d.symbols
-      .filter(s=>s.status==='TRADING'&&s.quoteAsset==='USDT')
-      .map(s=>({symbol:s.baseAsset+'/USDT',name:KNOWN_NAMES[s.baseAsset]||s.baseAsset,exchange:'Binance',type:'crypto'}))
+    return d
+      .filter(s=>s.symbol.endsWith('USDT'))
+      .map(s=>{const base=s.symbol.slice(0,-4);return{symbol:base+'/USDT',name:KNOWN_NAMES[base]||base,exchange:'Binance',type:'crypto'};})
       .sort((a,b)=>a.symbol.localeCompare(b.symbol));
-    return usdt;
   }catch(_){return null;}
 }
 
