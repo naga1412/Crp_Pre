@@ -936,7 +936,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const[filterTf,setFilterTf]=useState('1h');
   const[searchQ,setSearchQ]=useState('');
   const[scanType,setScanType]=useState('crypto'); // crypto (default), all, stocks
-  const[filterConf,setFilterConf]=useState('all'); // all, CONFIRMED, PROBABLE, WEAK
+  const[filterConf,setFilterConf]=useState('all'); // all, CONFIRMED, PROBABLE, WEAK, DIVERGING
   const[favInput,setFavInput]=useState('');
   const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
   const scanRef=useRef(false);
@@ -960,10 +960,22 @@ function ScannerTab({onNavigate,binanceSymbols}){
   // Timeout wrapper for fetch
   const withTimeout=(promise,ms=10000)=>Promise.race([promise,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
 
-  // Scan a single asset and return result
+  // Higher TF mapping — used for MTF confirmation
+  const HTF_MAP={'1m':'5m','5m':'15m','15m':'1h','1h':'4h','4h':'1d','1d':'1w','1w':'1w'};
+
+  // Scan a single asset — fetches current TF + next higher TF for MTF confirmation
   const scanAsset=useCallback(async(sym,type)=>{
     try{
-      const data=await withTimeout(fetchCandles(sym,filterTf,200),8000);
+      const higherTf=HTF_MAP[filterTf]||'4h';
+      const needHTF=higherTf!==filterTf;
+
+      // Fetch both TFs in parallel — HTF has shorter timeout (5s) since it's secondary
+      const [primary,htfRes]=await Promise.allSettled([
+        withTimeout(fetchCandles(sym,filterTf,200),8000),
+        needHTF?withTimeout(fetchCandles(sym,higherTf,100),5000):Promise.resolve(null),
+      ]);
+
+      const data=primary.status==='fulfilled'?primary.value:null;
       if(!data||data.length<55) return null;
       const price=data[data.length-1].close;
       const setup=generateSetup(data,price);
@@ -973,22 +985,43 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const master=calcMasterBias(setup,momSig,microSig,{score:0},{score:0},{score:0},null,price);
       const score=master?.score||0;
 
-      // Signal ALWAYS derived from master bias score — never conflicts with card section
-      // score>0 → LONG, score<0 → SHORT, near zero → use setup fallback
+      // Primary signal — always from master bias, never from setup alone
       const masterSignal=score>=10?'LONG':score<=-10?'SHORT':setup.signal;
-
-      // Confirmation: all three pillars must agree
-      // CONFIRMED: bias+signal+momentum all point same direction
-      // PROBABLE: bias+signal agree, momentum neutral or slightly off
-      // WEAK: only bias points direction, setup or momentum disagrees
       const biasDir=score>0?'LONG':score<0?'SHORT':null;
+
+      // Higher TF signal — required for CONFIRMED
+      let htfSignal=null,htfScore=0,htfPhase='';
+      const htfData=htfRes.status==='fulfilled'?htfRes.value:null;
+      if(htfData&&htfData.length>=55){
+        const htfSetup=generateSetup(htfData,price);
+        if(htfSetup){
+          const htfMom=calcMomentumScore(htfData);
+          const htfMicro=calcMicrostructureScore(htfData);
+          const htfMaster=calcMasterBias(htfSetup,htfMom,htfMicro,{score:0},{score:0},{score:0},null,price);
+          htfScore=htfMaster?.score||0;
+          htfSignal=htfScore>=10?'LONG':htfScore<=-10?'SHORT':htfSetup.signal;
+          htfPhase=htfSetup.phase;
+        }
+      }
+
+      // MTF agreement: current TF and higher TF must point same direction
+      const mtfAgrees=htfSignal===null||htfSignal===masterSignal;
+
+      // Within-TF confirmation pillars
       const setupAgrees=biasDir===setup.signal;
       const momAgrees=biasDir==='LONG'?momSig.score>0:biasDir==='SHORT'?momSig.score<0:false;
       const microAgrees=biasDir==='LONG'?microSig.score>=0:biasDir==='SHORT'?microSig.score<=0:false;
-      const confirmation=(!biasDir)?'NEUTRAL':
-        (setupAgrees&&momAgrees&&microAgrees)?'CONFIRMED':
-        (setupAgrees&&(momAgrees||microAgrees))?'PROBABLE':'WEAK';
-      const confirmColor=confirmation==='CONFIRMED'?'#26a69a':confirmation==='PROBABLE'?'#ff9800':confirmation==='NEUTRAL'?'#787b86':'#ef535088';
+
+      // Final confirmation — DIVERGING takes priority: no CONFIRMED when TFs disagree
+      const confirmation=!biasDir?'NEUTRAL':
+        !mtfAgrees?'DIVERGING':                                          // TFs conflict — never trade
+        (setupAgrees&&momAgrees&&microAgrees)?'CONFIRMED':               // all agree → safest
+        (setupAgrees&&(momAgrees||microAgrees))?'PROBABLE':'WEAK';       // partial agreement
+
+      const confirmColor=confirmation==='CONFIRMED'?'#26a69a':
+        confirmation==='PROBABLE'?'#ff9800':
+        confirmation==='DIVERGING'?'#ab47bc':
+        confirmation==='NEUTRAL'?'#787b86':'#ef535066';
 
       const c24=data.length>24?data[data.length-25]?.close:data[0]?.close;
       const chg24=c24?((price-c24)/c24*100):0;
@@ -1000,6 +1033,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
         mlConf:master?.mlConf||0,
         signal:masterSignal,
         htfBias:setup.htf_bias,phase:setup.phase,
+        htfSignal,htfScore,htfPhase,higherTf,mtfAgrees,
         confirmation,confirmColor,
         chg24:chg24.toFixed(2),
         spark,topSignals,
@@ -1094,6 +1128,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
     CONFIRMED: scanResults.filter(r=>r.confirmation==='CONFIRMED').length,
     PROBABLE:  scanResults.filter(r=>r.confirmation==='PROBABLE').length,
     WEAK:      scanResults.filter(r=>r.confirmation==='WEAK').length,
+    DIVERGING: scanResults.filter(r=>r.confirmation==='DIVERGING').length,
   }),[scanResults]);
 
   const isFav=(sym)=>favorites.includes(sym);
@@ -1114,11 +1149,13 @@ function ScannerTab({onNavigate,binanceSymbols}){
         </div>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:4,flexWrap:'wrap'}}>
-        {/* Signal direction — always matches the card section (LONG in bull, SHORT in bear) */}
+        {/* Signal direction — current TF */}
         <span style={{fontSize:10,fontWeight:700,color:'#131722',background:r.signal==='LONG'?'#26a69a':'#ef5350',padding:'2px 7px',borderRadius:4}}>{r.signal}</span>
+        {/* Higher TF signal — shown next to current TF so user sees both */}
+        {r.htfSignal&&<span style={{fontSize:9,fontWeight:600,color:r.htfSignal==='LONG'?'#26a69a88':'#ef535088',background:r.htfSignal==='LONG'?'#26a69a11':'#ef535011',padding:'2px 5px',borderRadius:4,border:`1px solid ${r.htfSignal==='LONG'?'#26a69a33':'#ef535033'}`}} title={`${r.higherTf} timeframe signal`}>{r.higherTf} {r.htfSignal}</span>}
         {/* Confirmation badge */}
         <span style={{fontSize:9,fontWeight:700,color:r.confirmColor||'#787b86',background:(r.confirmColor||'#787b86')+'18',padding:'2px 6px',borderRadius:4,border:`1px solid ${r.confirmColor||'#787b86'}44`,letterSpacing:'0.3px'}}>
-          {r.confirmation==='CONFIRMED'?'✓ CONFIRMED':r.confirmation==='PROBABLE'?'~ PROBABLE':r.confirmation==='NEUTRAL'?'NEUTRAL':'✗ WEAK'}
+          {r.confirmation==='CONFIRMED'?'✓ CONFIRMED':r.confirmation==='PROBABLE'?'~ PROBABLE':r.confirmation==='DIVERGING'?'⚡ DIVERGING':r.confirmation==='NEUTRAL'?'NEUTRAL':'✗ WEAK'}
         </span>
         <span style={{fontSize:10,color:'#787b86'}}>{r.phase}</span>
         <span style={{fontSize:10,color:parseFloat(r.chg24)>=0?'#26a69a':'#ef5350',marginLeft:'auto'}}>{parseFloat(r.chg24)>=0?'+':''}{r.chg24}%</span>
@@ -1181,13 +1218,13 @@ function ScannerTab({onNavigate,binanceSymbols}){
         {/* Confirmation filter toggle buttons */}
         <div style={{display:'flex',gap:3,alignItems:'center'}}>
           {[
-            {key:'all',       label:'All',          col:'#787b86', count: scanResults.length},
-            {key:'CONFIRMED', label:'✓ Confirmed',  col:'#26a69a', count: confCounts.CONFIRMED},
-            {key:'PROBABLE',  label:'~ Probable',   col:'#ff9800', count: confCounts.PROBABLE},
-            {key:'WEAK',      label:'✗ Weak',        col:'#ef5350', count: confCounts.WEAK},
-          ].map(({key,label,col,count})=>(
-            <button key={key} onClick={()=>setFilterConf(key)}
-              title={key==='all'?'Show all signals':key==='CONFIRMED'?'All 4 agree: Bias + Signal + Momentum + Microstructure':key==='PROBABLE'?'Bias + Signal agree, momentum slightly off':'Only bias points direction — low conviction, skip or wait'}
+            {key:'all',       label:'All',           col:'#787b86', count:scanResults.length,   tip:'Show all signals'},
+            {key:'CONFIRMED', label:'✓ Confirmed',   col:'#26a69a', count:confCounts.CONFIRMED, tip:'Current TF + Higher TF + Momentum + Micro all agree — safest trades'},
+            {key:'PROBABLE',  label:'~ Probable',    col:'#ff9800', count:confCounts.PROBABLE,  tip:'TFs agree but momentum/micro slightly off — wait for extra confirmation'},
+            {key:'WEAK',      label:'✗ Weak',         col:'#ef5350', count:confCounts.WEAK,      tip:'Only bias points direction — low conviction, skip or wait'},
+            {key:'DIVERGING', label:'⚡ Diverging',   col:'#ab47bc', count:confCounts.DIVERGING, tip:'Current TF and Higher TF disagree — DO NOT TRADE, conflicting signals'},
+          ].map(({key,label,col,count,tip})=>(
+            <button key={key} onClick={()=>setFilterConf(key)} title={tip}
               style={{
                 padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',borderRadius:4,transition:'all .15s',
                 background:filterConf===key?col+'28':'transparent',
