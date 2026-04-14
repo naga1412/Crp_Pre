@@ -1347,13 +1347,16 @@ const App=()=>{
 
   // VP canvas histogram overlay
   useEffect(()=>{
+    // Delay so LightweightCharts finishes rendering its own canvases first
+    const timer=setTimeout(()=>{
     const canvas=vpCanvasRef.current;
     if(!canvas) return;
     const ctx=canvas.getContext('2d');
     if(!ctx) return;
     try{
-      const W=canvas.parentElement?.clientWidth||0;
-      const H=canvas.parentElement?.clientHeight||0;
+      // Use chartRef dimensions — the actual rendered chart container
+      const W=chartRef.current?.clientWidth||canvas.parentElement?.clientWidth||0;
+      const H=chartRef.current?.clientHeight||canvas.parentElement?.clientHeight||0;
       if(!W||!H) return;
       const dpr=window.devicePixelRatio||1;
       canvas.width=W*dpr;
@@ -1366,22 +1369,52 @@ const App=()=>{
       const numBuckets=vols.length;
       const maxVol=Math.max(...vols);
       if(!maxVol) return;
-      const barMaxW=Math.min(W*0.18,80);
+      // Price axis takes ~65px on the right — draw bars to the LEFT of it
+      const priceAxisW=68;
+      const barMaxW=Math.min(W*0.20,110);
+      // Bar height based on chart height divided by bucket count — fills chart evenly
+      const barH=Math.max(2,Math.floor(H/numBuckets));
+      // Draw thin separator line between VP bars and price axis
+      ctx.globalAlpha=0.25;
+      ctx.strokeStyle='#2a2e39';
+      ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(W-priceAxisW,0);ctx.lineTo(W-priceAxisW,H);ctx.stroke();
       for(let i=0;i<numBuckets;i++){
         if(!vols[i]) continue;
         const priceMid=minP+(i+0.5)*bSz;
         const yCenter=cSeries.current.priceToCoordinate(priceMid);
-        if(yCenter==null) continue;
-        const barH=Math.max(1,Math.round((bSz/(vp.vah-vp.val||bSz*numBuckets))*H*0.7));
-        const barW=Math.max(2,(vols[i]/maxVol)*barMaxW);
+        if(yCenter==null||yCenter<0||yCenter>H) continue;
+        const barW=Math.max(3,(vols[i]/maxVol)*barMaxW);
         const isPoc=i===pocIdx;
-        const isHVN=vp.hvn.some(h=>Math.abs(h-priceMid)<bSz);
-        ctx.globalAlpha=isPoc?0.9:0.55;
-        ctx.fillStyle=isPoc?'#ff9800':isHVN?'#ffd600':inVA[i]?'#2962ff':'#546e7a';
-        ctx.fillRect(W-barW,yCenter-barH/2,barW,Math.max(1,barH));
+        const isHVN=vp.hvn&&vp.hvn.some(h=>Math.abs(h-priceMid)<bSz);
+        // Semi-transparent so candles/prediction show through clearly
+        ctx.globalAlpha=isPoc?0.85:inVA[i]?0.45:isHVN?0.55:0.22;
+        ctx.fillStyle=isPoc?'#ff9800':isHVN?'#ffd600':inVA[i]?'rgba(41,98,255,1)':'rgba(84,110,122,1)';
+        // Bars grow leftward from the price axis
+        ctx.fillRect(W-priceAxisW-barW, yCenter-barH/2, barW, Math.max(2,barH));
       }
+      // Draw POC / VAH / VAL horizontal lines directly on canvas too (belt-and-suspenders)
+      const drawHLine=(price,color,dash,label)=>{
+        const y=cSeries.current.priceToCoordinate(price);
+        if(y==null||y<0||y>H) return;
+        ctx.globalAlpha=0.9;
+        ctx.strokeStyle=color;
+        ctx.lineWidth=1.5;
+        ctx.setLineDash(dash);
+        ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W-priceAxisW,y);ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha=0.95;
+        ctx.fillStyle=color;
+        ctx.font='bold 9px Inter,sans-serif';
+        ctx.fillText(label,4,y-3);
+      };
+      drawHLine(vp.poc,'#ff9800',[],'POC');
+      drawHLine(vp.vah,'#26a69a',[4,3],'VAH');
+      drawHLine(vp.val,'#ef5350',[4,3],'VAL');
       ctx.globalAlpha=1;
     }catch(_){}
+    },120); // wait 120ms for LightweightCharts to finish rendering
+    return()=>clearTimeout(timer);
   },[setup,candles]);
 
   const momentumSig=useMemo(()=>calcMomentumScore(candles),[candles]);
@@ -1479,7 +1512,7 @@ const App=()=>{
             <span style={{color:'#787b86',fontSize:12}}>Loading {symbol} {tf}…</span>
           </div>}
           <div ref={chartRef} style={{width:'100%',height:'100%'}}/>
-          <canvas ref={vpCanvasRef} style={{position:'absolute',top:0,left:0,pointerEvents:'none',width:'100%',height:'100%'}}/>
+          <canvas ref={vpCanvasRef} style={{position:'absolute',top:0,left:0,pointerEvents:'none',width:'100%',height:'100%',zIndex:10}}/>
         </div>
 
         {/* PANEL */}
