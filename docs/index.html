@@ -936,6 +936,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const[filterTf,setFilterTf]=useState('1h');
   const[searchQ,setSearchQ]=useState('');
   const[scanType,setScanType]=useState('crypto'); // crypto (default), all, stocks
+  const[filterConf,setFilterConf]=useState('all'); // all, CONFIRMED, PROBABLE, WEAK
   const[favInput,setFavInput]=useState('');
   const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
   const scanRef=useRef(false);
@@ -1070,13 +1071,15 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const q=searchQ.toUpperCase();
       arr=arr.filter(r=>r.symbol.toUpperCase().includes(q)||(r.name||'').toUpperCase().includes(q));
     }
+    // Confirmation filter
+    if(filterConf!=='all') arr=arr.filter(r=>r.confirmation===filterConf);
     if(sortBy==='score') arr.sort((a,b)=>Math.abs(b.score)-Math.abs(a.score));
     else if(sortBy==='bullish') arr.sort((a,b)=>b.score-a.score);
     else if(sortBy==='bearish') arr.sort((a,b)=>a.score-b.score);
     else if(sortBy==='alpha') arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
     else if(sortBy==='change') arr.sort((a,b)=>Math.abs(parseFloat(b.chg24))-Math.abs(parseFloat(a.chg24)));
     return arr;
-  },[scanResults,searchQ,sortBy]);
+  },[scanResults,searchQ,sortBy,filterConf]);
 
   const bullish=displayed.filter(r=>r.score>0);
   const bearish=displayed.filter(r=>r.score<0);
@@ -1086,6 +1089,12 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const strongBear=bearish.filter(r=>r.score<-60);
   const modBear=bearish.filter(r=>r.score<-30&&r.score>=-60);
   const mildBear=bearish.filter(r=>r.score<0&&r.score>=-30);
+  // Confirmation counts across all scanned results (not filtered) — for button badges
+  const confCounts=useMemo(()=>({
+    CONFIRMED: scanResults.filter(r=>r.confirmation==='CONFIRMED').length,
+    PROBABLE:  scanResults.filter(r=>r.confirmation==='PROBABLE').length,
+    WEAK:      scanResults.filter(r=>r.confirmation==='WEAK').length,
+  }),[scanResults]);
 
   const isFav=(sym)=>favorites.includes(sym);
   const renderCard=(r)=>(
@@ -1169,6 +1178,26 @@ function ScannerTab({onNavigate,binanceSymbols}){
           <option value="change">24h Change</option>
           <option value="alpha">Alphabetical</option>
         </select>
+        {/* Confirmation filter toggle buttons */}
+        <div style={{display:'flex',gap:3,alignItems:'center'}}>
+          {[
+            {key:'all',       label:'All',          col:'#787b86', count: scanResults.length},
+            {key:'CONFIRMED', label:'✓ Confirmed',  col:'#26a69a', count: confCounts.CONFIRMED},
+            {key:'PROBABLE',  label:'~ Probable',   col:'#ff9800', count: confCounts.PROBABLE},
+            {key:'WEAK',      label:'✗ Weak',        col:'#ef5350', count: confCounts.WEAK},
+          ].map(({key,label,col,count})=>(
+            <button key={key} onClick={()=>setFilterConf(key)}
+              title={key==='all'?'Show all signals':key==='CONFIRMED'?'All 4 agree: Bias + Signal + Momentum + Microstructure':key==='PROBABLE'?'Bias + Signal agree, momentum slightly off':'Only bias points direction — low conviction, skip or wait'}
+              style={{
+                padding:'3px 8px',fontSize:10,fontWeight:700,cursor:'pointer',borderRadius:4,transition:'all .15s',
+                background:filterConf===key?col+'28':'transparent',
+                color:filterConf===key?col:'#787b86',
+                border:`1px solid ${filterConf===key?col+'66':'#2a2e39'}`,
+              }}>
+              {label}{count>0?<span style={{marginLeft:4,fontSize:9,opacity:0.8,background:col+'22',borderRadius:8,padding:'0 4px'}}>{count}</span>:null}
+            </button>
+          ))}
+        </div>
         <div style={{marginLeft:'auto'}} className="scan-status">
           {scanning&&<div style={{width:10,height:10,border:'2px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>}
           {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='crypto'?'200+ crypto':scanType==='stocks'?'stocks':'crypto+stocks'}…</span>:
