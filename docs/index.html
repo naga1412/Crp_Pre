@@ -45,6 +45,26 @@ body{background:#131722;color:#d1d4dc;font-family:'Inter',sans-serif;overflow:hi
 .nbear{background:#ef535022;color:#ef5350;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
 .nneutral{background:#787b8622;color:#787b86;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
 @keyframes spin{to{transform:rotate(360deg)}}
+.tab-btn{padding:5px 16px;border:none;cursor:pointer;font-size:12px;font-weight:600;border-radius:6px 6px 0 0;transition:all .2s}
+.tab-btn.active{background:#1e222d;color:#2962ff;border-bottom:2px solid #2962ff}
+.tab-btn:not(.active){background:transparent;color:#787b86}
+.scanner-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}
+@media(max-width:900px){.scanner-grid{grid-template-columns:1fr}}
+.scan-section{background:#1e222d;border-radius:8px;border:1px solid #2a2e39;overflow:hidden}
+.scan-header{padding:10px 14px;border-bottom:1px solid #2a2e39;display:flex;align-items:center;justify-content:space-between}
+.scan-cards{max-height:calc(100vh - 180px);overflow-y:auto;padding:6px}
+.signal-card{background:#131722;border-radius:6px;padding:10px 12px;margin-bottom:6px;cursor:pointer;transition:all .15s;border:1px solid #2a2e39}
+.signal-card:hover{border-color:#2962ff66;background:#1a1e2e}
+.signal-card.strong-bull{border-left:3px solid #26a69a;box-shadow:0 0 8px rgba(38,166,154,.15)}
+.signal-card.strong-bear{border-left:3px solid #ef5350;box-shadow:0 0 8px rgba(239,83,80,.15)}
+.signal-card.mod-bull{border-left:3px solid #26a69a55}
+.signal-card.mod-bear{border-left:3px solid #ef535055}
+.sparkline{display:inline-block;vertical-align:middle}
+.scan-controls{display:flex;gap:6px;padding:8px 12px;border-bottom:1px solid #2a2e39;flex-wrap:wrap;align-items:center}
+.scan-controls input,.scan-controls select{background:#131722;border:1px solid #2a2e39;border-radius:4px;color:#d1d4dc;font-size:11px;padding:4px 8px;outline:none}
+.scan-controls select{cursor:pointer}
+.scan-status{display:flex;align-items:center;gap:4px;font-size:10px;color:#787b86}
+.bias-bar-mini{height:4px;border-radius:2px;background:#2a2e39;overflow:hidden;flex:1}
 </style>
 </head>
 <body>
@@ -377,15 +397,73 @@ async function fetchIntermarketData(cryptoAsset){
     return{dxyChg:chg(res[0]),spxChg:chg(res[1]),goldChg:chg(res[2]),btcDom:btcDom?parseFloat(btcDom).toFixed(1):null};
   }catch(_){return null;}
 }
-function futureCandlesSim(candles,signal,atr,count){
-  let p=candles[candles.length-1].close;
-  return Array.from({length:count},(_,i)=>{
-    const dir=signal==='LONG'?1:-1;
-    const move=dir*atr*0.38*(1+Math.sin(i)*0.2);
-    const o=p,c=p+move,wick=atr*0.15;
+function futureCandlesSim(candles,signal,atr,count,ctx){
+  // ctx = {momScore, microScore, vpData, macd, squeeze, rsiVal, bbData, cmf, stoch}
+  const p0=candles[candles.length-1].close;
+  const mom=ctx?.momScore||0;
+  const micro=ctx?.microScore||0;
+  const macd=ctx?.macd||{};
+  const vp=ctx?.vpData||null;
+  const squeeze=ctx?.squeeze||false;
+  const rsi=ctx?.rsiVal||50;
+  const bb=ctx?.bbData||null;
+
+  // Direction is ALWAYS the signal direction — indicators only modulate strength
+  const dir=signal==='LONG'?1:-1;
+
+  // Strength multiplier from indicators (0.4 to 1.6 range — never reverses direction)
+  const momBoost=Math.max(-0.3,Math.min(0.3,mom/100)); // -0.3 to +0.3
+  const microBoost=Math.max(-0.15,Math.min(0.15,micro/100));
+  const macdBoost=macd.hist>0?(macd.expansion?0.15:0.05):(macd.expansion?-0.15:-0.05);
+  const squeezeBoost=squeeze?0.2:0;
+  // Sum: base 1.0 + boosts = 0.4 to 1.6 (always positive = never reverses)
+  const strength=Math.max(0.4,Math.min(1.6,1.0+momBoost+microBoost+macdBoost+squeezeBoost));
+
+  // RSI dampening at extremes (reduces magnitude, doesn't reverse)
+  const rsiDamp=rsi>75?0.6:rsi<25?0.6:rsi>65?0.8:rsi<35?0.8:1.0;
+
+  // Recent candle pattern for realistic wicks
+  const last10=candles.slice(-10);
+  const avgBody=last10.reduce((s,c)=>s+Math.abs(c.close-c.open),0)/10;
+  const avgRange=last10.reduce((s,c)=>s+c.high-c.low,0)/10||atr;
+  const bodyRatio=avgBody/(avgRange||1);
+
+  let p=p0;
+  const result=[];
+  for(let i=0;i<count;i++){
+    // Decay strength over time (uncertainty grows)
+    const decay=Math.max(0.3,1-i*0.05);
+    // Base move: always in signal direction, magnitude from indicators
+    let move=dir*atr*0.38*strength*decay*rsiDamp;
+
+    // VP levels as soft attractors/barriers — only when price is near POC (within 3 ATR)
+    if(vp){
+      const distPoc=(vp.poc-p)/atr;
+      if(Math.abs(distPoc)<3) move+=distPoc*0.03*atr*decay; // gentle pull toward POC only when close
+      // VAH resistance: only apply if price was BELOW VAH at prediction start (breakout not yet done)
+      if(dir>0&&p0<=vp.vah&&p>vp.vah&&Math.abs((vp.vah-p)/atr)<2) move*=0.9;
+      // VAL support: only apply if price was ABOVE VAL at prediction start (breakdown not yet done)
+      if(dir<0&&p0>=vp.val&&p<vp.val&&Math.abs((vp.val-p)/atr)<2) move*=0.9;
+    }
+
+    // BB: slight dampening if beyond bands
+    if(bb){
+      if(p>bb.upper) move*=0.85;
+      if(p<bb.lower) move*=0.85;
+    }
+
+    // Controlled variation (deterministic, adds natural candle rhythm)
+    const wave=1+Math.sin(i*1.7+0.5)*0.18;
+    move*=wave;
+
+    const o=p,c=p+move;
+    const wickScale=atr*(1-bodyRatio)*0.35*decay;
+    const wickUp=wickScale*(0.4+0.4*Math.abs(Math.sin(i*1.3)));
+    const wickDn=wickScale*(0.4+0.4*Math.abs(Math.cos(i*1.7)));
+    result.push({open:o,high:Math.max(o,c)+wickUp,low:Math.min(o,c)-wickDn,close:c});
     p=c;
-    return{open:o,high:Math.max(o,c)+wick,low:Math.min(o,c)-wick,close:c};
-  });
+  }
+  return result;
 }
 function generateSetup(candles,price){
   if(!candles||candles.length<55) return null;
@@ -401,7 +479,7 @@ function generateSetup(candles,price){
   const htf=bullBias?'Bullish':bearBias?'Bearish':'Neutral';
   const vp=calcVolumeProfile(candles);
   const vpBull=vp?(price>vp.val&&price<vp.poc?5:price>vp.poc?5:0):0;
-  const bullPct=(price>le9?25:0)+(price>le21?20:0)+(price>le50?15:0)+(lRSI>50?20:0)+(bos.filter(b=>b.type==='bull').length>0?20:0)+vpBull;
+  const bullPct=Math.min(100,(price>le9?25:0)+(price>le21?20:0)+(price>le50?15:0)+(lRSI>50?20:0)+(bos.filter(b=>b.type==='bull').length>0?20:0)+vpBull);
   let signal=bearBias&&lRSI>35?'SHORT':'LONG';
   if(bullBias&&lRSI<72) signal='LONG';
   if(vp&&bullPct>=48&&bullPct<=52) signal=price>vp.poc?'LONG':'SHORT';
@@ -416,7 +494,12 @@ function generateSetup(candles,price){
   else if(bearBias&&lRSI<45) phase='Markdown';
   else if(price>le50&&lRSI>60) phase='Distribution';
   const lc=candles[candles.length-1];
-  const TF_DEF={'1m':60,'5m':24,'15m':12,'1h':8,'4h':6,'1d':1,'1w':1};
+  // Compute full TA context for enhanced prediction
+  const _macd=calcMACD(C);const _stoch=calcStochRSI(C);const _cmf=calcCMF(candles);
+  const _bb=calcBB(C);const _klt=calcKeltner(candles);
+  const _squeeze=_bb&&_klt?_bb.upper<_klt.upper&&_bb.lower>_klt.lower:false;
+  const _momSig=calcMomentumScore(candles);const _microSig=calcMicrostructureScore(candles);
+  const predCtx={momScore:_momSig.score,microScore:_microSig.score,vpData:vp,macd:_macd,squeeze:_squeeze,rsiVal:lRSI,bbData:_bb,cmf:_cmf,stoch:_stoch};
   return{
     signal,htf_bias:htf,phase,bull_pct:bullPct,bear_pct:100-bullPct,
     rsi:lRSI.toFixed(1),atr:lATR.toFixed(price>100?2:6),
@@ -433,7 +516,7 @@ function generateSetup(candles,price){
     next_type:candleType(lc),
     next_size:lATR/price>0.02?'Large':lATR/price>0.008?'Medium':'Small',
     confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
-    future_candles:futureCandlesSim(candles,signal,lATR,12),
+    future_candles:futureCandlesSim(candles,signal,lATR,12,predCtx),
     vp_poc:vp?.poc||null,vp_vah:vp?.vah||null,vp_val:vp?.val||null,
     vp_hvn:vp?.hvn||[],vp_lvn:vp?.lvn||[],vp,
   };
@@ -754,8 +837,289 @@ function NewsPanel({nd}){
   );
 }
 
+// ─── SPARKLINE (tiny SVG chart for scanner cards) ─────────────────────────────
+function Sparkline({data,color,w=60,h=20}){
+  if(!data||data.length<2) return null;
+  const mn=Math.min(...data),mx=Math.max(...data),rng=mx-mn||1;
+  const pts=data.map((v,i)=>`${(i/(data.length-1))*w},${h-(((v-mn)/rng)*h)}`).join(' ');
+  return(<svg className="sparkline" width={w} height={h}><polyline points={pts} fill="none" stroke={color||'#787b86'} strokeWidth="1.5"/></svg>);
+}
+
+// ─── SIGNAL SCANNER TAB ──────────────────────────────────────────────────────
+function ScannerTab({onNavigate,binanceSymbols}){
+  const[scanResults,setScanResults]=useState([]);
+  const[scanning,setScanning]=useState(false);
+  const[lastScan,setLastScan]=useState(null);
+  const[sortBy,setSortBy]=useState('score');
+  const[filterTf,setFilterTf]=useState('1h');
+  const[searchQ,setSearchQ]=useState('');
+  const[scanType,setScanType]=useState('all'); // all, crypto, stocks
+  const[favInput,setFavInput]=useState('');
+  const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
+  const scanRef=useRef(false);
+  const resultsRef=useRef([]);
+
+  // Persist favorites to localStorage
+  const addFavorite=(sym)=>{
+    const s=sym.toUpperCase().trim();
+    if(!s) return;
+    // Auto-format: if no slash, assume crypto USDT pair
+    const formatted=s.includes('/')?s:s.includes('USDT')?s.slice(0,-4)+'/USDT':s+'/USDT';
+    if(favorites.includes(formatted)) return;
+    const next=[...favorites,formatted];
+    setFavorites(next);localStorage.setItem('smc_favorites',JSON.stringify(next));
+  };
+  const removeFavorite=(sym)=>{
+    const next=favorites.filter(f=>f!==sym);
+    setFavorites(next);localStorage.setItem('smc_favorites',JSON.stringify(next));
+  };
+
+  // Timeout wrapper for fetch
+  const withTimeout=(promise,ms=10000)=>Promise.race([promise,new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),ms))]);
+
+  // Scan a single asset and return result
+  const scanAsset=useCallback(async(sym,type)=>{
+    try{
+      const data=await withTimeout(fetchCandles(sym,filterTf,200),8000);
+      if(!data||data.length<55) return null;
+      const price=data[data.length-1].close;
+      const setup=generateSetup(data,price);
+      if(!setup) return null;
+      const momSig=calcMomentumScore(data);
+      const microSig=calcMicrostructureScore(data);
+      const master=calcMasterBias(setup,momSig,microSig,{score:0},{score:0},{score:0},null,price);
+      const c24=data.length>24?data[data.length-25]?.close:data[0]?.close;
+      const chg24=c24?((price-c24)/c24*100):0;
+      const spark=data.slice(-20).map(c=>c.close);
+      const topSignals=(master?.features||[]).slice(0,3).map(f=>({name:f.n,value:Math.round(f.v),weight:Math.round(f.w*100)}));
+      return{
+        symbol:sym,type,price,
+        score:master?.score||0,label:master?.label||'Neutral',color:master?.color||'#787b86',
+        mlConf:master?.mlConf||0,
+        signal:setup.signal,htfBias:setup.htf_bias,phase:setup.phase,
+        confidence:setup.confidence,
+        chg24:chg24.toFixed(2),
+        spark,topSignals,
+        strongestTf:filterTf,
+        ts:Date.now()
+      };
+    }catch(_){return null;}
+  },[filterTf]);
+
+  // Batch scan — stream results progressively
+  const runScan=useCallback(async()=>{
+    if(scanRef.current) return;
+    scanRef.current=true;
+    setScanning(true);
+    const seen=new Set();
+    const assets=[];
+    // Always scan favorites first
+    for(const sym of favorites){
+      if(seen.has(sym)) continue;seen.add(sym);
+      const type=isCrypto(sym)?'crypto':'stock';
+      assets.push({sym,type,name:sym.split('/')[0],isFav:true});
+    }
+    if(scanType==='all'||scanType==='crypto'){
+      const cryptos=(binanceSymbols||CRYPTO_LIST).slice(0,50);
+      cryptos.forEach(c=>{if(!seen.has(c.symbol)){seen.add(c.symbol);assets.push({sym:c.symbol,type:'crypto',name:c.name});}});
+    }
+    if(scanType==='all'||scanType==='stocks'){
+      STOCK_LIST.slice(0,20).forEach(s=>{if(!seen.has(s.symbol)){seen.add(s.symbol);assets.push({sym:s.symbol,type:s.type,name:s.name});}});
+    }
+    const results=[];
+    for(let i=0;i<assets.length;i+=8){
+      const batch=assets.slice(i,i+8);
+      const batchResults=await Promise.allSettled(batch.map(a=>scanAsset(a.sym,a.type)));
+      for(let j=0;j<batchResults.length;j++){
+        if(batchResults[j].status==='fulfilled'&&batchResults[j].value){
+          const r=batchResults[j].value;
+          r.name=batch[j].name;
+          r.isFav=batch[j].isFav||false;
+          results.push(r);
+        }
+      }
+      setScanResults([...results]);
+      if(i+8<assets.length) await new Promise(r=>setTimeout(r,200));
+    }
+    resultsRef.current=results;
+    setScanResults([...results]);
+    setLastScan(new Date());
+    setScanning(false);
+    scanRef.current=false;
+  },[scanAsset,scanType,binanceSymbols,favorites]);
+
+  // Auto-scan on mount and every 2 minutes
+  useEffect(()=>{
+    runScan();
+    const id=setInterval(runScan,120000);
+    return()=>clearInterval(id);
+  },[filterTf,scanType]);
+
+  // Sort & filter results
+  const displayed=useMemo(()=>{
+    let arr=[...scanResults];
+    if(searchQ){
+      const q=searchQ.toUpperCase();
+      arr=arr.filter(r=>r.symbol.toUpperCase().includes(q)||(r.name||'').toUpperCase().includes(q));
+    }
+    if(sortBy==='score') arr.sort((a,b)=>Math.abs(b.score)-Math.abs(a.score));
+    else if(sortBy==='bullish') arr.sort((a,b)=>b.score-a.score);
+    else if(sortBy==='bearish') arr.sort((a,b)=>a.score-b.score);
+    else if(sortBy==='alpha') arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+    else if(sortBy==='change') arr.sort((a,b)=>Math.abs(parseFloat(b.chg24))-Math.abs(parseFloat(a.chg24)));
+    return arr;
+  },[scanResults,searchQ,sortBy]);
+
+  const bullish=displayed.filter(r=>r.score>0);
+  const bearish=displayed.filter(r=>r.score<0);
+  const strongBull=bullish.filter(r=>r.score>60);
+  const modBull=bullish.filter(r=>r.score>30&&r.score<=60);
+  const mildBull=bullish.filter(r=>r.score>0&&r.score<=30);
+  const strongBear=bearish.filter(r=>r.score<-60);
+  const modBear=bearish.filter(r=>r.score<-30&&r.score>=-60);
+  const mildBear=bearish.filter(r=>r.score<0&&r.score>=-30);
+
+  const isFav=(sym)=>favorites.includes(sym);
+  const renderCard=(r)=>(
+    <div key={r.symbol} className={`signal-card ${r.score>60?'strong-bull':r.score>30?'mod-bull':r.score<-60?'strong-bear':r.score<-30?'mod-bear':''}`}
+      onClick={()=>onNavigate(r.symbol,filterTf)}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:4}}>
+          <span onClick={e=>{e.stopPropagation();isFav(r.symbol)?removeFavorite(r.symbol):addFavorite(r.symbol);}}
+            style={{cursor:'pointer',fontSize:12,color:isFav(r.symbol)?'#ffd600':'#2a2e39',transition:'color .15s'}}
+            title={isFav(r.symbol)?'Remove from watchlist':'Add to watchlist'}>{isFav(r.symbol)?'★':'☆'}</span>
+          <span style={{fontSize:12,fontWeight:700,color:'#d1d4dc'}}>{r.symbol}</span>
+          {r.name&&r.name!==r.symbol.split('/')[0]&&<span style={{fontSize:10,color:'#787b86',marginLeft:4}}>{r.name}</span>}
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          <Sparkline data={r.spark} color={r.color}/>
+          <span style={{fontSize:11,fontWeight:700,color:r.color}}>{r.score>0?'+':''}{r.score}</span>
+        </div>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+        <span style={{fontSize:10,fontWeight:600,color:r.color,background:r.color+'18',padding:'1px 6px',borderRadius:8,border:`1px solid ${r.color}44`}}>{r.label}</span>
+        <span style={{fontSize:10,color:r.signal==='LONG'?'#26a69a':'#ef5350',fontWeight:600}}>{r.signal}</span>
+        <span style={{fontSize:10,color:'#787b86'}}>{r.phase}</span>
+        <span style={{fontSize:10,color:parseFloat(r.chg24)>=0?'#26a69a':'#ef5350',marginLeft:'auto'}}>{parseFloat(r.chg24)>=0?'+':''}{r.chg24}%</span>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:2}}>
+        <div className="bias-bar-mini" style={{width:60}}>
+          <div style={{position:'relative',height:'100%'}}>
+            <div style={{position:'absolute',left:r.score>=0?'50%':`${50+r.score/2}%`,width:Math.abs(r.score)/2+'%',height:'100%',background:r.color,borderRadius:2}}/>
+          </div>
+        </div>
+        <span style={{fontSize:9,color:'#787b86'}}>Conf {r.mlConf}%</span>
+      </div>
+      {r.topSignals&&r.topSignals.length>0&&(
+        <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+          {r.topSignals.map((s,i)=>(
+            <span key={i} style={{fontSize:9,color:s.value>0?'#26a69a':s.value<0?'#ef5350':'#787b86',background:'#1e222d',padding:'1px 5px',borderRadius:3}}>{s.name} {s.value>0?'+':''}{s.value}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSection=(title,items,color,icon)=>(
+    items.length>0&&(
+      <div style={{marginBottom:4}}>
+        <div style={{display:'flex',alignItems:'center',gap:4,padding:'4px 6px',fontSize:10,fontWeight:700,color,textTransform:'uppercase',letterSpacing:'.5px'}}>
+          {icon} {title} <span style={{fontSize:9,fontWeight:400,color:'#787b86'}}>({items.length})</span>
+        </div>
+        {items.map(renderCard)}
+      </div>
+    )
+  );
+
+  return(
+    <div style={{height:'100%',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+      <div className="scan-controls">
+        <input placeholder="Search assets…" value={searchQ} onChange={e=>setSearchQ(e.target.value)} style={{width:120}}/>
+        <div style={{display:'flex',alignItems:'center',gap:2}}>
+          <input placeholder="Add to watchlist…" value={favInput} onChange={e=>setFavInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&favInput.trim()){addFavorite(favInput);setFavInput('');}}}
+            style={{width:120,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#ffd600',fontSize:11,padding:'4px 8px',outline:'none'}}/>
+          <button onClick={()=>{if(favInput.trim()){addFavorite(favInput);setFavInput('');}}}
+            style={{background:'#ffd60022',border:'1px solid #ffd60044',borderRadius:4,color:'#ffd600',fontSize:10,fontWeight:700,padding:'4px 8px',cursor:'pointer'}}>★ Add</button>
+        </div>
+        <select value={scanType} onChange={e=>setScanType(e.target.value)}>
+          <option value="all">All Assets</option>
+          <option value="crypto">Crypto Only</option>
+          <option value="stocks">Stocks Only</option>
+        </select>
+        <select value={filterTf} onChange={e=>setFilterTf(e.target.value)}>
+          {TIMEFRAMES.map(t=><option key={t} value={t}>{t}</option>)}
+        </select>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+          <option value="score">Strongest Signal</option>
+          <option value="bullish">Most Bullish</option>
+          <option value="bearish">Most Bearish</option>
+          <option value="change">24h Change</option>
+          <option value="alpha">Alphabetical</option>
+        </select>
+        <div style={{marginLeft:'auto'}} className="scan-status">
+          {scanning&&<div style={{width:10,height:10,border:'2px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>}
+          {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='all'?'all assets':scanType}…</span>:
+            <span style={{color:'#26a69a'}}>✓ {scanResults.length} scanned</span>}
+          {lastScan&&<span> · {lastScan.toLocaleTimeString()}</span>}
+        </div>
+      </div>
+      {/* FAVORITES BAR */}
+      {favorites.length>0&&(
+        <div style={{display:'flex',alignItems:'center',gap:4,padding:'4px 12px',borderBottom:'1px solid #2a2e39',flexWrap:'wrap',background:'#1a1a2e'}}>
+          <span style={{fontSize:10,fontWeight:700,color:'#ffd600',marginRight:4}}>★ Watchlist:</span>
+          {favorites.map(f=>(
+            <span key={f} style={{display:'inline-flex',alignItems:'center',gap:3,background:'#ffd60012',border:'1px solid #ffd60033',borderRadius:10,padding:'2px 8px',fontSize:10,color:'#ffd600'}}>
+              {f}
+              <span onClick={()=>removeFavorite(f)} style={{cursor:'pointer',color:'#ffd60088',fontSize:12,lineHeight:1}} title="Remove">×</span>
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="scanner-grid" style={{flex:1,overflow:'auto'}}>
+        {/* FAVORITES RESULTS (shown at top of bullish side if any) */}
+        {/* BULLISH SIDE */}
+        <div className="scan-section">
+          <div className="scan-header">
+            <span style={{color:'#26a69a',fontWeight:700,fontSize:13}}>▲ Bullish Signals</span>
+            <span style={{fontSize:10,color:'#787b86'}}>{bullish.length} assets</span>
+          </div>
+          <div className="scan-cards">
+            {/* Favorite results pinned at top */}
+            {(()=>{const favResults=displayed.filter(r=>favorites.includes(r.symbol)&&r.score>=0);return favResults.length>0?renderSection('★ Watchlist',favResults,'#ffd600','★'):null;})()}
+            {!scanning&&bullish.length===0&&<p style={{padding:16,textAlign:'center',color:'#787b86',fontSize:11}}>No bullish signals found</p>}
+            {renderSection('Strong Bullish (>+60)',strongBull,'#26a69a','🟢')}
+            {renderSection('Moderate (+30 to +60)',modBull,'#26a69a','🟡')}
+            {renderSection('Mild (0 to +30)',mildBull,'#787b86','⚪')}
+          </div>
+        </div>
+        {/* BEARISH SIDE */}
+        <div className="scan-section">
+          <div className="scan-header">
+            <span style={{color:'#ef5350',fontWeight:700,fontSize:13}}>▼ Bearish Signals</span>
+            <span style={{fontSize:10,color:'#787b86'}}>{bearish.length} assets</span>
+          </div>
+          <div className="scan-cards">
+            {/* Favorite results pinned at top */}
+            {(()=>{const favResults=displayed.filter(r=>favorites.includes(r.symbol)&&r.score<0);return favResults.length>0?renderSection('★ Watchlist',favResults,'#ffd600','★'):null;})()}
+            {!scanning&&bearish.length===0&&<p style={{padding:16,textAlign:'center',color:'#787b86',fontSize:11}}>No bearish signals found</p>}
+            {renderSection('Strong Bearish (<-60)',strongBear,'#ef5350','🔴')}
+            {renderSection('Moderate (-30 to -60)',modBear,'#ef5350','🟡')}
+            {renderSection('Mild (-30 to 0)',mildBear,'#787b86','⚪')}
+          </div>
+        </div>
+      </div>
+      <div style={{padding:'6px 12px',borderTop:'1px solid #2a2e39',display:'flex',justifyContent:'space-between',fontSize:10,color:'#787b86',flexShrink:0}}>
+        <span>Scanning top {scanType==='stocks'?'30 stocks':scanType==='crypto'?'50 crypto':'80 assets'} · {filterTf} timeframe</span>
+        <span>Auto-refresh every 2 min · Click card to view chart</span>
+      </div>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 const App=()=>{
+  const[activeTab,setActiveTab]=useState('chart'); // 'chart' | 'scanner'
   const[symbol,setSymbol]=useState('BTC/USDT');
   const[tf,setTf]=useState('1h');
   const[candles,setCandles]=useState(null);
@@ -807,6 +1171,13 @@ const App=()=>{
     window.addEventListener('resize',resize);
     return()=>{window.removeEventListener('resize',resize);chart.remove();chartInst.current=null;};
   },[]);
+
+  // Resize chart when switching back to chart tab (was hidden via display:none)
+  useEffect(()=>{
+    if(activeTab==='chart'&&chartInst.current&&chartRef.current){
+      setTimeout(()=>{chartInst.current.applyOptions({width:chartRef.current.clientWidth,height:chartRef.current.clientHeight});chartInst.current.timeScale().scrollToRealTime();},50);
+    }
+  },[activeTab]);
 
   // Render candles
   useEffect(()=>{
@@ -1063,31 +1434,44 @@ const App=()=>{
       {/* HEADER */}
       <header style={{height:46,display:'flex',alignItems:'center',gap:8,padding:'0 12px',borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0,flexWrap:'nowrap',overflow:'hidden'}}>
         <span style={{color:'#2962ff',fontWeight:700,fontSize:14,flexShrink:0}}>⚡ SMC</span>
-        <button onClick={()=>setShowSearch(true)} style={{display:'flex',alignItems:'center',gap:6,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'4px 10px',color:'#d1d4dc',cursor:'pointer',fontSize:13,fontWeight:600,flexShrink:0}}>
-          {symbol}<span style={{fontSize:9,color:'#787b86'}}>▼</span>
-        </button>
-        {price!=null&&<span style={{fontSize:14,fontWeight:700,color:chgPos===false?'#ef5350':chgPos?'#26a69a':'#d1d4dc',flexShrink:0}}>{fmt(price,dec)}</span>}
-        {chgPct!=null&&<span style={{fontSize:11,color:chgPos?'#26a69a':'#ef5350',flexShrink:0}}>{chgPos?'+':''}{chgPct.toFixed(2)}%</span>}
-        {macroLbl&&<span style={{fontSize:10,color:macroC,background:macroC+'18',padding:'2px 7px',borderRadius:10,border:`1px solid ${macroC}44`,flexShrink:0}}>📰 {macroLbl}{hiCount>0?` · 🔴${hiCount}`:''}</span>}
-        <div style={{flex:1}}/>
-        <div style={{display:'flex',alignItems:'center',gap:4,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'2px 6px',flexShrink:0}}>
-          <span style={{fontSize:10,color:'#787b86',whiteSpace:'nowrap'}}>🕯</span>
-          <input type="number" min="0" max="200" value={futureCount} onChange={e=>setFutureCount(e.target.value)} placeholder="auto"
-            style={{width:40,background:'transparent',border:'none',outline:'none',color:'#FFC800',fontSize:11,fontWeight:600,textAlign:'center'}}/>
+        <div style={{display:'flex',gap:0,marginRight:4,flexShrink:0}}>
+          <button className={`tab-btn ${activeTab==='chart'?'active':''}`} onClick={()=>setActiveTab('chart')}>📊 Chart</button>
+          <button className={`tab-btn ${activeTab==='scanner'?'active':''}`} onClick={()=>setActiveTab('scanner')}>🔍 Scanner</button>
         </div>
-        <div style={{display:'flex',gap:2,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:2,flexShrink:0}}>
-          {TIMEFRAMES.map(t=>(
-            <button key={t} onClick={()=>changeTf(t)} style={{padding:'3px 8px',borderRadius:3,border:'none',cursor:'pointer',fontSize:11,fontWeight:500,background:tf===t?'#2962ff':'transparent',color:tf===t?'#fff':'#787b86'}}>{t}</button>
-          ))}
-        </div>
-        <div style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'#787b86',flexShrink:0}}>
-          <div style={{width:6,height:6,borderRadius:'50%',background:error?'#ef5350':wsStatus==='live'?'#26a69a':wsStatus==='delayed'?'#ff9800':'#787b86'}}/>
-          {error?'Error':wsStatus==='live'?'Live':wsStatus==='delayed'?'Delayed':'…'}
-        </div>
+        {activeTab==='chart'&&<>
+          <button onClick={()=>setShowSearch(true)} style={{display:'flex',alignItems:'center',gap:6,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'4px 10px',color:'#d1d4dc',cursor:'pointer',fontSize:13,fontWeight:600,flexShrink:0}}>
+            {symbol}<span style={{fontSize:9,color:'#787b86'}}>▼</span>
+          </button>
+          {price!=null&&<span style={{fontSize:14,fontWeight:700,color:chgPos===false?'#ef5350':chgPos?'#26a69a':'#d1d4dc',flexShrink:0}}>{fmt(price,dec)}</span>}
+          {chgPct!=null&&<span style={{fontSize:11,color:chgPos?'#26a69a':'#ef5350',flexShrink:0}}>{chgPos?'+':''}{chgPct.toFixed(2)}%</span>}
+          {macroLbl&&<span style={{fontSize:10,color:macroC,background:macroC+'18',padding:'2px 7px',borderRadius:10,border:`1px solid ${macroC}44`,flexShrink:0}}>📰 {macroLbl}{hiCount>0?` · 🔴${hiCount}`:''}</span>}
+          <div style={{flex:1}}/>
+          <div style={{display:'flex',alignItems:'center',gap:4,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'2px 6px',flexShrink:0}}>
+            <span style={{fontSize:10,color:'#787b86',whiteSpace:'nowrap'}}>🕯</span>
+            <input type="number" min="0" max="200" value={futureCount} onChange={e=>setFutureCount(e.target.value)} placeholder="auto"
+              style={{width:40,background:'transparent',border:'none',outline:'none',color:'#FFC800',fontSize:11,fontWeight:600,textAlign:'center'}}/>
+          </div>
+          <div style={{display:'flex',gap:2,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:2,flexShrink:0}}>
+            {TIMEFRAMES.map(t=>(
+              <button key={t} onClick={()=>changeTf(t)} style={{padding:'3px 8px',borderRadius:3,border:'none',cursor:'pointer',fontSize:11,fontWeight:500,background:tf===t?'#2962ff':'transparent',color:tf===t?'#fff':'#787b86'}}>{t}</button>
+            ))}
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:4,fontSize:10,color:'#787b86',flexShrink:0}}>
+            <div style={{width:6,height:6,borderRadius:'50%',background:error?'#ef5350':wsStatus==='live'?'#26a69a':wsStatus==='delayed'?'#ff9800':'#787b86'}}/>
+            {error?'Error':wsStatus==='live'?'Live':wsStatus==='delayed'?'Delayed':'…'}
+          </div>
+        </>}
+        {activeTab==='scanner'&&<div style={{flex:1}}/>}
       </header>
 
       {/* WORKSPACE */}
       <div style={{flex:1,display:'flex',overflow:'hidden'}}>
+        {/* Scanner tab — always mounted, hidden via display */}
+        <div style={{display:activeTab==='scanner'?'flex':'none',flex:1,overflow:'hidden'}}>
+          <ScannerTab binanceSymbols={binanceSymbols} onNavigate={(sym,t)=>{setSymbol(sym);setTf(t);setActiveTab('chart');}}/>
+        </div>
+        {/* Chart + Panel — always mounted, hidden via display */}
+        <div style={{display:activeTab==='chart'?'flex':'none',flex:1,overflow:'hidden'}}>
         {/* Chart */}
         <div style={{flex:1,position:'relative'}}>
           {loading&&<div style={{position:'absolute',inset:0,background:'rgba(19,23,34,.8)',zIndex:10,display:'flex',alignItems:'center',justifyContent:'center',flexDirection:'column',gap:12}}>
@@ -1400,6 +1784,7 @@ const App=()=>{
             </>
           )}
         </div>
+      </div>
       </div>
 
       {/* SEARCH MODAL */}
