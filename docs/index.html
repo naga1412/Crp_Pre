@@ -667,6 +667,7 @@ function buildNd(items,symbol){
 
 // ─── SYMBOL LIST ──────────────────────────────────────────────────────────────
 const CRYPTO_LIST=[
+  // Top-cap
   {symbol:'BTC/USDT',name:'Bitcoin',exchange:'Binance',type:'crypto'},{symbol:'ETH/USDT',name:'Ethereum',exchange:'Binance',type:'crypto'},
   {symbol:'BNB/USDT',name:'BNB',exchange:'Binance',type:'crypto'},{symbol:'SOL/USDT',name:'Solana',exchange:'Binance',type:'crypto'},
   {symbol:'XRP/USDT',name:'Ripple',exchange:'Binance',type:'crypto'},{symbol:'DOGE/USDT',name:'Dogecoin',exchange:'Binance',type:'crypto'},
@@ -686,7 +687,88 @@ const CRYPTO_LIST=[
   {symbol:'MKR/USDT',name:'Maker',exchange:'Binance',type:'crypto'},{symbol:'AAVE/USDT',name:'Aave',exchange:'Binance',type:'crypto'},
   {symbol:'BCH/USDT',name:'Bitcoin Cash',exchange:'Binance',type:'crypto'},{symbol:'FIL/USDT',name:'Filecoin',exchange:'Binance',type:'crypto'},
   {symbol:'SEI/USDT',name:'Sei Network',exchange:'Binance',type:'crypto'},{symbol:'ENA/USDT',name:'Ethena',exchange:'Binance',type:'crypto'},
-  {symbol:'ETH/BTC',name:'Ethereum/BTC',exchange:'Binance',type:'crypto'},{symbol:'SOL/BTC',name:'Solana/BTC',exchange:'Binance',type:'crypto'},
+  // Mid-cap
+  {symbol:'ALGO/USDT',name:'Algorand',exchange:'Binance',type:'crypto'},{symbol:'VET/USDT',name:'VeChain',exchange:'Binance',type:'crypto'},
+  {symbol:'ICP/USDT',name:'Internet Computer',exchange:'Binance',type:'crypto'},{symbol:'STX/USDT',name:'Stacks',exchange:'Binance',type:'crypto'},
+  {symbol:'HBAR/USDT',name:'Hedera',exchange:'Binance',type:'crypto'},{symbol:'THETA/USDT',name:'Theta Network',exchange:'Binance',type:'crypto'},
+  {symbol:'EGLD/USDT',name:'MultiversX',exchange:'Binance',type:'crypto'},{symbol:'XLM/USDT',name:'Stellar',exchange:'Binance',type:'crypto'},
+  {symbol:'XMR/USDT',name:'Monero',exchange:'Binance',type:'crypto'},{symbol:'ETC/USDT',name:'Ethereum Classic',exchange:'Binance',type:'crypto'},
+  {symbol:'MANA/USDT',name:'Decentraland',exchange:'Binance',type:'crypto'},{symbol:'SAND/USDT',name:'The Sandbox',exchange:'Binance',type:'crypto'},
+  {symbol:'AXS/USDT',name:'Axie Infinity',exchange:'Binance',type:'crypto'},{symbol:'CRV/USDT',name:'Curve DAO',exchange:'Binance',type:'crypto'},
+  {symbol:'SNX/USDT',name:'Synthetix',exchange:'Binance',type:'crypto'},{symbol:'COMP/USDT',name:'Compound',exchange:'Binance',type:'crypto'},
+  {symbol:'ZEC/USDT',name:'Zcash',exchange:'Binance',type:'crypto'},{symbol:'BAT/USDT',name:'Basic Attention',exchange:'Binance',type:'crypto'},
+  {symbol:'ENS/USDT',name:'Ethereum Name Service',exchange:'Binance',type:'crypto'},{symbol:'1INCH/USDT',name:'1inch',exchange:'Binance',type:'crypto'},
+  {symbol:'RUNE/USDT',name:'THORChain',exchange:'Binance',type:'crypto'},{symbol:'KAVA/USDT',name:'Kava',exchange:'Binance',type:'crypto'},
+  {symbol:'ZIL/USDT',name:'Zilliqa',exchange:'Binance',type:'crypto'},{symbol:'IOTA/USDT',name:'IOTA',exchange:'Binance',type:'crypto'},
+  {symbol:'CHZ/USDT',name:'Chiliz',exchange:'Binance',type:'crypto'},{symbol:'HOT/USDT',name:'Holo',exchange:'Binance',type:'crypto'},
+  {symbol:'GALA/USDT',name:'Gala',exchange:'Binance',type:'crypto'},{symbol:'RSR/USDT',name:'Reserve Rights',exchange:'Binance',type:'crypto'},
+  {symbol:'YFI/USDT',name:'yearn.finance',exchange:'Binance',type:'crypto'},{symbol:'SUSHI/USDT',name:'SushiSwap',exchange:'Binance',type:'crypto'},
+  {symbol:'BAL/USDT',name:'Balancer',exchange:'Binance',type:'crypto'},{symbol:'FLOW/USDT',name:'Flow',exchange:'Binance',type:'crypto'},
+  {symbol:'ROSE/USDT',name:'Oasis Network',exchange:'Binance',type:'crypto'},{symbol:'ONE/USDT',name:'Harmony',exchange:'Binance',type:'crypto'},
+  {symbol:'KSM/USDT',name:'Kusama',exchange:'Binance',type:'crypto'},{symbol:'WAVES/USDT',name:'Waves',exchange:'Binance',type:'crypto'},
+  {symbol:'ZRX/USDT',name:'0x Protocol',exchange:'Binance',type:'crypto'},{symbol:'AUDIO/USDT',name:'Audius',exchange:'Binance',type:'crypto'},
+  {symbol:'CELO/USDT',name:'Celo',exchange:'Binance',type:'crypto'},{symbol:'ANKR/USDT',name:'Ankr',exchange:'Binance',type:'crypto'},
+  // DeFi / L2
+  {symbol:'GMX/USDT',name:'GMX',exchange:'Binance',type:'crypto'},{symbol:'DYDX/USDT',name:'dYdX',exchange:'Binance',type:'crypto'},
+  {symbol:'RPL/USDT',name:'Rocket Pool',exchange:'Binance',type:'crypto'},{symbol:'SSV/USDT',name:'SSV Network',exchange:'Binance',type:'crypto'},
+  {symbol:'PENDLE/USDT',name:'Pendle',exchange:'Binance',type:'crypto'},{symbol:'RDNT/USDT',name:'Radiant Capital',exchange:'Binance',type:'crypto'},
+  {symbol:'CVX/USDT',name:'Convex Finance',exchange:'Binance',type:'crypto'},{symbol:'FXS/USDT',name:'Frax Share',exchange:'Binance',type:'crypto'},
+  {symbol:'CELR/USDT',name:'Celer Network',exchange:'Binance',type:'crypto'},{symbol:'BICO/USDT',name:'Biconomy',exchange:'Binance',type:'crypto'},
+  // AI / infra
+  {symbol:'OCEAN/USDT',name:'Ocean Protocol',exchange:'Binance',type:'crypto'},{symbol:'NMR/USDT',name:'Numeraire',exchange:'Binance',type:'crypto'},
+  {symbol:'AGIX/USDT',name:'SingularityNET',exchange:'Binance',type:'crypto'},{symbol:'CTXC/USDT',name:'Cortex',exchange:'Binance',type:'crypto'},
+  {symbol:'PHB/USDT',name:'Phoenix Global',exchange:'Binance',type:'crypto'},{symbol:'VITE/USDT',name:'Vite',exchange:'Binance',type:'crypto'},
+  // Gaming / Metaverse
+  {symbol:'IMX/USDT',name:'Immutable X',exchange:'Binance',type:'crypto'},{symbol:'MAGIC/USDT',name:'Magic',exchange:'Binance',type:'crypto'},
+  {symbol:'GODS/USDT',name:'Gods Unchained',exchange:'Binance',type:'crypto'},{symbol:'WAXP/USDT',name:'WAX',exchange:'Binance',type:'crypto'},
+  {symbol:'ILV/USDT',name:'Illuvium',exchange:'Binance',type:'crypto'},{symbol:'SLP/USDT',name:'Smooth Love Potion',exchange:'Binance',type:'crypto'},
+  // Meme / community
+  {symbol:'FLOKI/USDT',name:'Floki',exchange:'Binance',type:'crypto'},{symbol:'BOME/USDT',name:'Book of Meme',exchange:'Binance',type:'crypto'},
+  {symbol:'NOT/USDT',name:'Notcoin',exchange:'Binance',type:'crypto'},{symbol:'DOGS/USDT',name:'Dogs',exchange:'Binance',type:'crypto'},
+  {symbol:'HMSTR/USDT',name:'Hamster Kombat',exchange:'Binance',type:'crypto'},{symbol:'NEIRO/USDT',name:'Neiro',exchange:'Binance',type:'crypto'},
+  // New / trending
+  {symbol:'WEN/USDT',name:'Wen',exchange:'Binance',type:'crypto'},{symbol:'PYTH/USDT',name:'Pyth Network',exchange:'Binance',type:'crypto'},
+  {symbol:'W/USDT',name:'Wormhole',exchange:'Binance',type:'crypto'},{symbol:'OMNI/USDT',name:'Omni Network',exchange:'Binance',type:'crypto'},
+  {symbol:'REZ/USDT',name:'Renzo',exchange:'Binance',type:'crypto'},{symbol:'BB/USDT',name:'BounceBit',exchange:'Binance',type:'crypto'},
+  {symbol:'IO/USDT',name:'io.net',exchange:'Binance',type:'crypto'},{symbol:'ZK/USDT',name:'ZKsync',exchange:'Binance',type:'crypto'},
+  {symbol:'LISTA/USDT',name:'Lista DAO',exchange:'Binance',type:'crypto'},{symbol:'MANTA/USDT',name:'Manta Network',exchange:'Binance',type:'crypto'},
+  {symbol:'ALT/USDT',name:'AltLayer',exchange:'Binance',type:'crypto'},{symbol:'DYM/USDT',name:'Dymension',exchange:'Binance',type:'crypto'},
+  {symbol:'STRK/USDT',name:'Starknet',exchange:'Binance',type:'crypto'},{symbol:'PIXEL/USDT',name:'Pixels',exchange:'Binance',type:'crypto'},
+  {symbol:'PORTAL/USDT',name:'Portal',exchange:'Binance',type:'crypto'},{symbol:'MEME/USDT',name:'Memecoin',exchange:'Binance',type:'crypto'},
+  {symbol:'ONDO/USDT',name:'Ondo',exchange:'Binance',type:'crypto'},{symbol:'ACE/USDT',name:'Fusionist',exchange:'Binance',type:'crypto'},
+  {symbol:'NFP/USDT',name:'NFPrompt',exchange:'Binance',type:'crypto'},{symbol:'MYRO/USDT',name:'Myro',exchange:'Binance',type:'crypto'},
+  {symbol:'ORDI/USDT',name:'ORDI',exchange:'Binance',type:'crypto'},{symbol:'SATS/USDT',name:'SATS',exchange:'Binance',type:'crypto'},
+  {symbol:'1000PEPE/USDT',name:'1000PEPE',exchange:'Binance',type:'crypto'},{symbol:'1000BONK/USDT',name:'1000BONK',exchange:'Binance',type:'crypto'},
+  {symbol:'ETHFI/USDT',name:'ether.fi',exchange:'Binance',type:'crypto'},{symbol:'AEVO/USDT',name:'Aevo',exchange:'Binance',type:'crypto'},
+  {symbol:'MERL/USDT',name:'Merlin Chain',exchange:'Binance',type:'crypto'},{symbol:'SAGA/USDT',name:'Saga',exchange:'Binance',type:'crypto'},
+  {symbol:'TAIKO/USDT',name:'Taiko',exchange:'Binance',type:'crypto'},{symbol:'VANRY/USDT',name:'Vanar Chain',exchange:'Binance',type:'crypto'},
+  {symbol:'ZETA/USDT',name:'ZetaChain',exchange:'Binance',type:'crypto'},{symbol:'JTO/USDT',name:'Jito',exchange:'Binance',type:'crypto'},
+  {symbol:'TIA/USDT',name:'Celestia',exchange:'Binance',type:'crypto'},{symbol:'BLUR/USDT',name:'Blur',exchange:'Binance',type:'crypto'},
+  {symbol:'CYBER/USDT',name:'CyberConnect',exchange:'Binance',type:'crypto'},{symbol:'ID/USDT',name:'SPACE ID',exchange:'Binance',type:'crypto'},
+  {symbol:'LEVER/USDT',name:'LeverFi',exchange:'Binance',type:'crypto'},{symbol:'LQTY/USDT',name:'Liquity',exchange:'Binance',type:'crypto'},
+  {symbol:'MINA/USDT',name:'Mina Protocol',exchange:'Binance',type:'crypto'},{symbol:'MOVR/USDT',name:'Moonriver',exchange:'Binance',type:'crypto'},
+  {symbol:'OGN/USDT',name:'Origin Protocol',exchange:'Binance',type:'crypto'},{symbol:'PROM/USDT',name:'Prom',exchange:'Binance',type:'crypto'},
+  {symbol:'RARE/USDT',name:'SuperRare',exchange:'Binance',type:'crypto'},{symbol:'REI/USDT',name:'REI Network',exchange:'Binance',type:'crypto'},
+  {symbol:'SKL/USDT',name:'SKALE',exchange:'Binance',type:'crypto'},{symbol:'SPELL/USDT',name:'Spell Token',exchange:'Binance',type:'crypto'},
+  {symbol:'SXP/USDT',name:'Solar',exchange:'Binance',type:'crypto'},{symbol:'TFUEL/USDT',name:'Theta Fuel',exchange:'Binance',type:'crypto'},
+  {symbol:'TROY/USDT',name:'Troy',exchange:'Binance',type:'crypto'},{symbol:'TWT/USDT',name:'Trust Wallet Token',exchange:'Binance',type:'crypto'},
+  {symbol:'UTK/USDT',name:'Utrust',exchange:'Binance',type:'crypto'},{symbol:'VOXEL/USDT',name:'Voxies',exchange:'Binance',type:'crypto'},
+  {symbol:'WOO/USDT',name:'WOO Network',exchange:'Binance',type:'crypto'},{symbol:'XVS/USDT',name:'Venus',exchange:'Binance',type:'crypto'},
+  {symbol:'YGG/USDT',name:'Yield Guild Games',exchange:'Binance',type:'crypto'},{symbol:'NULS/USDT',name:'NULS',exchange:'Binance',type:'crypto'},
+  {symbol:'OXT/USDT',name:'Orchid',exchange:'Binance',type:'crypto'},{symbol:'BAND/USDT',name:'Band Protocol',exchange:'Binance',type:'crypto'},
+  {symbol:'SFP/USDT',name:'SafePal',exchange:'Binance',type:'crypto'},{symbol:'XVG/USDT',name:'Verge',exchange:'Binance',type:'crypto'},
+  {symbol:'JASMY/USDT',name:'JasmyCoin',exchange:'Binance',type:'crypto'},{symbol:'ACH/USDT',name:'Alchemy Pay',exchange:'Binance',type:'crypto'},
+  {symbol:'ALPACA/USDT',name:'Alpaca Finance',exchange:'Binance',type:'crypto'},{symbol:'CHESS/USDT',name:'Tranchess',exchange:'Binance',type:'crypto'},
+  {symbol:'DUSK/USDT',name:'Dusk',exchange:'Binance',type:'crypto'},{symbol:'FIDA/USDT',name:'Bonfida',exchange:'Binance',type:'crypto'},
+  {symbol:'FRONT/USDT',name:'Frontier',exchange:'Binance',type:'crypto'},{symbol:'GLM/USDT',name:'Golem',exchange:'Binance',type:'crypto'},
+  {symbol:'HIGH/USDT',name:'Highstreet',exchange:'Binance',type:'crypto'},{symbol:'HIFI/USDT',name:'Hifi Finance',exchange:'Binance',type:'crypto'},
+  {symbol:'IQ/USDT',name:'IQ',exchange:'Binance',type:'crypto'},{symbol:'IRIS/USDT',name:'IRISnet',exchange:'Binance',type:'crypto'},
+  {symbol:'KEY/USDT',name:'SelfKey',exchange:'Binance',type:'crypto'},{symbol:'KMD/USDT',name:'Komodo',exchange:'Binance',type:'crypto'},
+  {symbol:'LOOM/USDT',name:'Loom Network',exchange:'Binance',type:'crypto'},{symbol:'LPT/USDT',name:'Livepeer',exchange:'Binance',type:'crypto'},
+  {symbol:'LUMIA/USDT',name:'Lumia',exchange:'Binance',type:'crypto'},{symbol:'MDX/USDT',name:'Mdex',exchange:'Binance',type:'crypto'},
+  {symbol:'MLN/USDT',name:'Enzyme',exchange:'Binance',type:'crypto'},{symbol:'MTL/USDT',name:'Metal DAO',exchange:'Binance',type:'crypto'},
+  {symbol:'NKN/USDT',name:'NKN',exchange:'Binance',type:'crypto'},{symbol:'NMR/USDT',name:'Numeraire',exchange:'Binance',type:'crypto'},
+  {symbol:'OAX/USDT',name:'OAX',exchange:'Binance',type:'crypto'},{symbol:'OMG/USDT',name:'OMG Network',exchange:'Binance',type:'crypto'},
 ];
 const STOCK_LIST=[
   {symbol:'AAPL',name:'Apple Inc.',exchange:'NASDAQ',type:'stock'},{symbol:'MSFT',name:'Microsoft Corp.',exchange:'NASDAQ',type:'stock'},
@@ -853,7 +935,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const[sortBy,setSortBy]=useState('score');
   const[filterTf,setFilterTf]=useState('1h');
   const[searchQ,setSearchQ]=useState('');
-  const[scanType,setScanType]=useState('all'); // all, crypto, stocks
+  const[scanType,setScanType]=useState('crypto'); // crypto (default), all, stocks
   const[favInput,setFavInput]=useState('');
   const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
   const scanRef=useRef(false);
@@ -888,16 +970,36 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const momSig=calcMomentumScore(data);
       const microSig=calcMicrostructureScore(data);
       const master=calcMasterBias(setup,momSig,microSig,{score:0},{score:0},{score:0},null,price);
+      const score=master?.score||0;
+
+      // Signal ALWAYS derived from master bias score — never conflicts with card section
+      // score>0 → LONG, score<0 → SHORT, near zero → use setup fallback
+      const masterSignal=score>=10?'LONG':score<=-10?'SHORT':setup.signal;
+
+      // Confirmation: all three pillars must agree
+      // CONFIRMED: bias+signal+momentum all point same direction
+      // PROBABLE: bias+signal agree, momentum neutral or slightly off
+      // WEAK: only bias points direction, setup or momentum disagrees
+      const biasDir=score>0?'LONG':score<0?'SHORT':null;
+      const setupAgrees=biasDir===setup.signal;
+      const momAgrees=biasDir==='LONG'?momSig.score>0:biasDir==='SHORT'?momSig.score<0:false;
+      const microAgrees=biasDir==='LONG'?microSig.score>=0:biasDir==='SHORT'?microSig.score<=0:false;
+      const confirmation=(!biasDir)?'NEUTRAL':
+        (setupAgrees&&momAgrees&&microAgrees)?'CONFIRMED':
+        (setupAgrees&&(momAgrees||microAgrees))?'PROBABLE':'WEAK';
+      const confirmColor=confirmation==='CONFIRMED'?'#26a69a':confirmation==='PROBABLE'?'#ff9800':confirmation==='NEUTRAL'?'#787b86':'#ef535088';
+
       const c24=data.length>24?data[data.length-25]?.close:data[0]?.close;
       const chg24=c24?((price-c24)/c24*100):0;
       const spark=data.slice(-20).map(c=>c.close);
       const topSignals=(master?.features||[]).slice(0,3).map(f=>({name:f.n,value:Math.round(f.v),weight:Math.round(f.w*100)}));
       return{
         symbol:sym,type,price,
-        score:master?.score||0,label:master?.label||'Neutral',color:master?.color||'#787b86',
+        score,label:master?.label||'Neutral',color:master?.color||'#787b86',
         mlConf:master?.mlConf||0,
-        signal:setup.signal,htfBias:setup.htf_bias,phase:setup.phase,
-        confidence:setup.confidence,
+        signal:masterSignal,
+        htfBias:setup.htf_bias,phase:setup.phase,
+        confirmation,confirmColor,
         chg24:chg24.toFixed(2),
         spark,topSignals,
         strongestTf:filterTf,
@@ -919,16 +1021,22 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const type=isCrypto(sym)?'crypto':'stock';
       assets.push({sym,type,name:sym.split('/')[0],isFav:true});
     }
-    if(scanType==='all'||scanType==='crypto'){
-      const cryptos=(binanceSymbols||CRYPTO_LIST).slice(0,50);
-      cryptos.forEach(c=>{if(!seen.has(c.symbol)){seen.add(c.symbol);assets.push({sym:c.symbol,type:'crypto',name:c.name});}});
+    // Crypto: always scan 200+ — use dynamic Binance list merged with hardcoded list
+    if(scanType==='crypto'||scanType==='all'){
+      // Build a deduplicated pool: dynamic Binance symbols first (sorted by volume), then hardcoded extras
+      const dynPool=(binanceSymbols||[]).filter(c=>c.symbol.endsWith('/USDT'));
+      const dynSet=new Set(dynPool.map(c=>c.symbol));
+      const extras=CRYPTO_LIST.filter(c=>!dynSet.has(c.symbol));
+      const cryptoPool=[...dynPool,...extras].slice(0,220); // cap at 220 to avoid overloading
+      cryptoPool.forEach(c=>{if(!seen.has(c.symbol)){seen.add(c.symbol);assets.push({sym:c.symbol,type:'crypto',name:c.name||c.symbol.split('/')[0]});}});
     }
-    if(scanType==='all'||scanType==='stocks'){
-      STOCK_LIST.slice(0,20).forEach(s=>{if(!seen.has(s.symbol)){seen.add(s.symbol);assets.push({sym:s.symbol,type:s.type,name:s.name});}});
+    // Stocks: only if explicitly selected — crypto is the default
+    if(scanType==='stocks'){
+      STOCK_LIST.slice(0,30).forEach(s=>{if(!seen.has(s.symbol)){seen.add(s.symbol);assets.push({sym:s.symbol,type:s.type,name:s.name});}});
     }
     const results=[];
-    for(let i=0;i<assets.length;i+=8){
-      const batch=assets.slice(i,i+8);
+    for(let i=0;i<assets.length;i+=10){
+      const batch=assets.slice(i,i+10);
       const batchResults=await Promise.allSettled(batch.map(a=>scanAsset(a.sym,a.type)));
       for(let j=0;j<batchResults.length;j++){
         if(batchResults[j].status==='fulfilled'&&batchResults[j].value){
@@ -939,7 +1047,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
         }
       }
       setScanResults([...results]);
-      if(i+8<assets.length) await new Promise(r=>setTimeout(r,200));
+      if(i+10<assets.length) await new Promise(r=>setTimeout(r,150));
     }
     resultsRef.current=results;
     setScanResults([...results]);
@@ -996,9 +1104,13 @@ function ScannerTab({onNavigate,binanceSymbols}){
           <span style={{fontSize:11,fontWeight:700,color:r.color}}>{r.score>0?'+':''}{r.score}</span>
         </div>
       </div>
-      <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
-        <span style={{fontSize:10,fontWeight:600,color:r.color,background:r.color+'18',padding:'1px 6px',borderRadius:8,border:`1px solid ${r.color}44`}}>{r.label}</span>
-        <span style={{fontSize:10,color:r.signal==='LONG'?'#26a69a':'#ef5350',fontWeight:600}}>{r.signal}</span>
+      <div style={{display:'flex',alignItems:'center',gap:5,marginBottom:4,flexWrap:'wrap'}}>
+        {/* Signal direction — always matches the card section (LONG in bull, SHORT in bear) */}
+        <span style={{fontSize:10,fontWeight:700,color:'#131722',background:r.signal==='LONG'?'#26a69a':'#ef5350',padding:'2px 7px',borderRadius:4}}>{r.signal}</span>
+        {/* Confirmation badge */}
+        <span style={{fontSize:9,fontWeight:700,color:r.confirmColor||'#787b86',background:(r.confirmColor||'#787b86')+'18',padding:'2px 6px',borderRadius:4,border:`1px solid ${r.confirmColor||'#787b86'}44`,letterSpacing:'0.3px'}}>
+          {r.confirmation==='CONFIRMED'?'✓ CONFIRMED':r.confirmation==='PROBABLE'?'~ PROBABLE':r.confirmation==='NEUTRAL'?'NEUTRAL':'✗ WEAK'}
+        </span>
         <span style={{fontSize:10,color:'#787b86'}}>{r.phase}</span>
         <span style={{fontSize:10,color:parseFloat(r.chg24)>=0?'#26a69a':'#ef5350',marginLeft:'auto'}}>{parseFloat(r.chg24)>=0?'+':''}{r.chg24}%</span>
       </div>
@@ -1043,9 +1155,9 @@ function ScannerTab({onNavigate,binanceSymbols}){
             style={{background:'#ffd60022',border:'1px solid #ffd60044',borderRadius:4,color:'#ffd600',fontSize:10,fontWeight:700,padding:'4px 8px',cursor:'pointer'}}>★ Add</button>
         </div>
         <select value={scanType} onChange={e=>setScanType(e.target.value)}>
-          <option value="all">All Assets</option>
-          <option value="crypto">Crypto Only</option>
+          <option value="crypto">Crypto 200+</option>
           <option value="stocks">Stocks Only</option>
+          <option value="all">Crypto + Stocks</option>
         </select>
         <select value={filterTf} onChange={e=>setFilterTf(e.target.value)}>
           {TIMEFRAMES.map(t=><option key={t} value={t}>{t}</option>)}
@@ -1059,7 +1171,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
         </select>
         <div style={{marginLeft:'auto'}} className="scan-status">
           {scanning&&<div style={{width:10,height:10,border:'2px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>}
-          {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='all'?'all assets':scanType}…</span>:
+          {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='crypto'?'200+ crypto':scanType==='stocks'?'stocks':'crypto+stocks'}…</span>:
             <span style={{color:'#26a69a'}}>✓ {scanResults.length} scanned</span>}
           {lastScan&&<span> · {lastScan.toLocaleTimeString()}</span>}
         </div>
@@ -1110,7 +1222,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
         </div>
       </div>
       <div style={{padding:'6px 12px',borderTop:'1px solid #2a2e39',display:'flex',justifyContent:'space-between',fontSize:10,color:'#787b86',flexShrink:0}}>
-        <span>Scanning top {scanType==='stocks'?'30 stocks':scanType==='crypto'?'50 crypto':'80 assets'} · {filterTf} timeframe</span>
+        <span>Scanning {scanType==='stocks'?'top 30 stocks':scanType==='crypto'?'200+ crypto':'crypto + stocks'} · {filterTf} timeframe</span>
         <span>Auto-refresh every 2 min · Click card to view chart</span>
       </div>
     </div>
