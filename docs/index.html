@@ -925,9 +925,16 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   // RSI dampening (extreme RSI = exhaustion, reduce body sizes)
   const rsiDamp=rsi>78?0.50:rsi<22?0.50:rsi>68?0.75:rsi<32?0.75:1.0;
 
-  // Scaled sizes from NN — first candle gets full NN magnitude
-  const baseBody=nnMag*2*atr;   // NN-calibrated body (1.0 = 2 ATRs)
-  const baseRange=nnVol*3*atr;  // NN-calibrated range (1.0 = 3 ATRs)
+  // Measure recent ACTUAL candle sizes — ghost candles must be proportional to real ones
+  const last20=candles.slice(-20);
+  const avgBody=last20.reduce((s,c)=>s+Math.abs(c.close-c.open),0)/last20.length;
+  const avgRange=last20.reduce((s,c)=>s+c.high-c.low,0)/last20.length||atr;
+
+  // Base sizes: NN magnitude/volatility calibrate direction & confidence,
+  // but floor is always 70% of recent actual candle body so ghosts look realistic.
+  // When NN is early/uncertain (low nnMag), real candle size still wins.
+  const baseBody=Math.max(avgBody*0.70, nnMag*2*atr);
+  const baseRange=Math.max(avgRange*0.60, nnVol*3*atr);
 
   // ── STRUCTURE SEQUENCE ──
   // highConf (>35% away from 50%): impulse waves with pullbacks
@@ -2402,7 +2409,37 @@ const App=()=>{
     return{pct:Math.max(0,Math.min(100,pct)),label:pct>65?'Bullish':pct<35?'Bearish':'Neutral'};
   },[mtfVP,price]);
 
-  const masterBias=useMemo(()=>calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price),[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price]);
+  // EMA smoothing ref — prevents signal flip-flop on small price ticks
+  const _biasEMA=React.useRef(0);
+  const _lastSignal=React.useRef(null);
+  const _signalHoldCount=React.useRef(0);
+
+  const masterBias=useMemo(()=>{
+    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price);
+    if(!raw) return null;
+    // EMA smoothing: 65% weight to history, 35% to new reading
+    // Result: signal needs several consistent ticks in same direction to actually flip
+    _biasEMA.current=Math.round(_biasEMA.current*0.65+raw.score*0.35);
+    const s=_biasEMA.current;
+    const rawInstantSignal=s>=8?'LONG':s<=-8?'SHORT':'NEUTRAL';
+    // Signal hold lock: only allow flip after 2 consecutive readings in new direction
+    if(rawInstantSignal!==_lastSignal.current){
+      _signalHoldCount.current=(_signalHoldCount.current||0)+1;
+      if(_signalHoldCount.current<2&&_lastSignal.current!==null){
+        // Not enough consecutive readings in new direction yet — hold current signal
+        const heldScore=_lastSignal.current==='LONG'?Math.max(8,s):_lastSignal.current==='SHORT'?Math.min(-8,s):s;
+        const hLabel=heldScore>=25?'Strong Bull':heldScore>=8?'Bullish':heldScore<=-25?'Strong Bear':heldScore<=-8?'Bearish':'Neutral';
+        return{...raw,score:heldScore,rawInstant:raw.score,label:hLabel,color:heldScore>=8?'#26a69a':heldScore<=-8?'#ef5350':'#787b86'};
+      }
+      _lastSignal.current=rawInstantSignal;
+      _signalHoldCount.current=0;
+    } else {
+      _signalHoldCount.current=0;
+    }
+    const newLabel=s>=25?'Strong Bull':s>=8?'Bullish':s<=-25?'Strong Bear':s<=-8?'Bearish':'Neutral';
+    const newColor=s>=8?'#26a69a':s<=-8?'#ef5350':'#787b86';
+    return{...raw,score:s,rawInstant:raw.score,label:newLabel,color:newColor};
+  },[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price]);
 
   // ── AI SUPERVISOR ADJUSTMENT ──
   // Blends NN probability into Master Bias Score.
@@ -2413,8 +2450,10 @@ const App=()=>{
     if(!nnResult||nnResult.totalCandles<150) return{...masterBias,rawScore:masterBias.score,aiWeight:0,aiOverride:false,aiSignal:masterBias.score>=8?'LONG':masterBias.score<=-8?'SHORT':'NEUTRAL'};
     const nnConf=Math.abs(nnResult.prob-0.5)*2; // 0→1
     const liveAcc=(nnResult.recentAcc!=null?nnResult.recentAcc:nnResult.accuracy)||50;
-    // NN weight: scales 0→40% based on confidence × how much better than random it is
-    const nnWeight=Math.min(0.40,Math.max(0.05,nnConf*0.5+Math.max(0,(liveAcc-50)/100)));
+    // NN weight: scales 0→55% based on confidence × how much better than random it is
+    // Cap raised to 55% for well-trained models (>60% live accuracy)
+    const maxWeight=liveAcc>=65?0.55:liveAcc>=60?0.48:0.40;
+    const nnWeight=Math.min(maxWeight,Math.max(0.05,nnConf*0.6+Math.max(0,(liveAcc-50)/80)));
     const indWeight=1-nnWeight;
     // NN score on same -100…+100 scale as Master Bias
     const nnScore=(nnResult.prob-0.5)*200;
