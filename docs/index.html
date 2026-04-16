@@ -1511,7 +1511,7 @@ function Sparkline({data,color,w=60,h=20}){
 function AIChatTab({marketContext}){
   const[apiKey,setApiKey]=useState(()=>localStorage.getItem('smc_ai_api_key')||'');
   const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'gemini');
-  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your free AI assistant powered by Google Gemini.\n\nI can:\n• Answer questions about the current market & signals\n• Explain any indicator or pattern\n• Modify the app code for you (add features, change colors, etc.)\n\nExamples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Add a volume spike alert to the chart"\n  "Make the ghost candles larger"\n\n⬆️ Add your FREE Gemini API key above to get started.\nGet it free at aistudio.google.com → Get API Key (uses your Google account, no payment needed)'}]);
+  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your free AI assistant powered by Google Gemini.\n\nI can help with ANYTHING:\n• Trading questions — signals, indicators, market analysis\n• General chat — coding, math, writing, any topic\n• App modifications — add features, change colors, fix bugs\n\nTrading examples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Explain the current ghost candles"\n\nCode change examples:\n  "Add a volume spike alert to the chart"\n  "Make the bias score font bigger"\n\nGeneral examples:\n  "Explain what Wyckoff theory is"\n  "Write me a trading journal template"\n\n⬆️ Add your FREE Gemini API key above to get started.\nGet it free at aistudio.google.com → Get API Key (uses your Google account, no payment needed)'}]);
   const[input,setInput]=useState('');
   const[loading,setLoading]=useState(false);
   const[showKey,setShowKey]=useState(()=>!localStorage.getItem('smc_ai_api_key'));
@@ -1534,43 +1534,44 @@ function AIChatTab({marketContext}){
 
   const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
     // ── Google Gemini (FREE — 1500 req/day) ──
-    // Try models in order: 1.5-flash (most stable free tier) → 2.0-flash → 1.5-pro
+    // Tries v1 endpoint first (more stable), then v1beta, across multiple models
     if(provider==='gemini'){
-      const GEMINI_MODELS=['gemini-1.5-flash','gemini-2.0-flash-lite','gemini-1.5-pro'];
+      const ATTEMPTS=[
+        {ver:'v1',model:'gemini-1.5-flash'},
+        {ver:'v1',model:'gemini-1.5-pro'},
+        {ver:'v1beta',model:'gemini-1.5-flash-latest'},
+        {ver:'v1beta',model:'gemini-2.0-flash-lite'},
+        {ver:'v1beta',model:'gemini-pro'},
+      ];
       const hist=historyRef.current.slice(-10).map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
-      // Ensure history alternates correctly (Gemini requires user/model alternation)
+      // Gemini requires strict user/model alternation — fix any consecutive same-role
       const safeHist=[];
       for(const h of hist){
-        if(safeHist.length&&safeHist[safeHist.length-1].role===h.role) continue; // skip consecutive same role
+        if(safeHist.length&&safeHist[safeHist.length-1].role===h.role) continue;
         safeHist.push(h);
       }
       const body={
         contents:[
           {role:'user',parts:[{text:systemPrompt}]},
-          {role:'model',parts:[{text:'Understood. I will follow these instructions exactly.'}]},
+          {role:'model',parts:[{text:'Got it. I will follow these instructions.'}]},
           ...safeHist,
           {role:'user',parts:[{text:userMsg}]}
         ],
         generationConfig:{maxOutputTokens:maxTokens,temperature:0.7}
       };
-      let lastErr='';
-      for(const model of GEMINI_MODELS){
-        const url=`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      let lastErr='Unknown error';
+      for(const{ver,model}of ATTEMPTS){
+        const url=`https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent?key=${apiKey}`;
         try{
           const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-          if(r.status===429||r.status===403){
-            const e=await r.json().catch(()=>({}));
-            lastErr=e?.error?.message||`quota exceeded on ${model}`;
-            continue; // try next model
-          }
-          if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`Gemini error ${r.status}`);}
-          const d=await r.json();
+          const d=await r.json().catch(()=>({}));
+          if(!r.ok){lastErr=d?.error?.message||`${r.status} on ${model}`;continue;}
           const txt=d.candidates?.[0]?.content?.parts?.[0]?.text;
-          if(!txt) continue;
-          return txt;
-        }catch(e){lastErr=e.message;if(!e.message.includes('quota')&&!e.message.includes('429'))throw e;}
+          if(txt) return txt;
+          lastErr=`Empty response from ${model}`;
+        }catch(e){lastErr=e.message;}
       }
-      throw new Error(`All Gemini models quota exceeded.\n${lastErr}\n\nFix: Go to aistudio.google.com → Rate Limits → check your project has free tier enabled.`);
+      throw new Error(`Gemini error: ${lastErr}\n\nTry: create a NEW API key at aistudio.google.com with a NEW project.`);
     }
     // ── OpenAI ──
     if(provider==='openai'){
@@ -1592,22 +1593,34 @@ function AIChatTab({marketContext}){
     return(await r.json()).content[0].text;
   };
 
-  const doMarketQ=async(q)=>{
-    const ctx=marketContext||{};
-    const sys=`You are an expert AI trading assistant inside SMC Pro Analyzer (crypto & stock analysis app).
+  // Detect if message is about trading/market/app
+  const isMarketQ=(t)=>{
+    const lo=t.toLowerCase();
+    return /\b(btc|eth|sol|crypto|stock|trade|trading|signal|long|short|rsi|macd|ema|candle|chart|price|market|bull|bear|buy|sell|position|leverage|entry|stop|target|profit|loss|bias|indicator|volume|funding|fear|greed|wyckoff|fibonacci|support|resistance|breakout|trend|momentum|divergence|neural|nn|prediction|ghost|scanner|analysis|atr|bb|bollinger|stoch|cmf|oi|vp|poc|vah|val)\b/.test(lo);
+  };
 
-Current live market state:
-- Symbol: ${ctx.symbol||'?'} | Timeframe: ${ctx.tf||'?'}
-- Price: ${ctx.price||'?'}
-- Master Bias Score: ${ctx.biasScore||0} → ${ctx.biasLabel||'?'} | AI Signal: ${ctx.aiSignal||'?'}${ctx.aiOverride?' (NN overrode indicators)':''}
-- NN Prediction: prob=${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(0)+'%':'?'} | live accuracy=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% | corrections=${ctx.nnCorrections||0}
+  const doChat=async(q)=>{
+    const ctx=marketContext||{};
+    const isMarket=isMarketQ(q);
+    // Build system prompt — always include market context if available, but also allow general chat
+    const marketCtxStr=ctx.symbol?`
+Current live market state (use if relevant to the question):
+- Symbol: ${ctx.symbol} | Timeframe: ${ctx.tf} | Price: ${ctx.price}
+- Signal: ${ctx.aiSignal||'?'} | Bias Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'})${ctx.aiOverride?' — NN overrode indicators':''}
 - RSI(14): ${ctx.rsi||'?'} | StochRSI K: ${ctx.stochK||'?'} | MACD hist: ${ctx.macdHist||'?'} | CMF: ${ctx.cmf||'?'}
 - Wyckoff Phase: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'}
 - Volume Profile: POC=${ctx.poc||'?'} | VAH=${ctx.vah||'?'} | VAL=${ctx.val||'?'}
-- Stop Loss: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
-- OI Funding Rate: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
-
-Answer concisely and specifically. Be actionable. Under 300 words.`;
+- Entry: current price | SL: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
+- NN: prob=${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(0)+'%':'?'} accuracy=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% corrections=${ctx.nnCorrections||0}
+- OI Funding: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
+`:'';
+    const sys=`You are a helpful, friendly AI assistant. You are embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool, but you can help with ANY topic — not just trading.
+${marketCtxStr}
+Guidelines:
+- For trading/market questions: be specific, actionable, reference the live data above
+- For general questions (coding, math, writing, anything): just answer helpfully like a smart assistant
+- Keep responses clear and concise (under 400 words unless more detail is genuinely needed)
+- Be conversational and friendly`;
     const ans=await callLLM(sys,q);
     addMsg('assistant',ans);
   };
@@ -1656,7 +1669,7 @@ Rules:
     setLoading(true);
     try{
       if(isCodeReq(t)) await doCodeMod(t);
-      else await doMarketQ(t);
+      else await doChat(t);
     }catch(e){addMsg('assistant',`❌ ${e.message}`);}
     finally{setLoading(false);}
   };
@@ -1666,9 +1679,11 @@ Rules:
     'Should I go long or short?',
     'What does RSI say?',
     'Explain the current signal',
-    'Is this a good entry zone?',
+    'What is Wyckoff theory?',
+    'Explain SMC trading',
     'Add RSI alert when above 70',
     'Make ghost candles bigger',
+    'What is a good risk management strategy?',
   ];
 
   return(
