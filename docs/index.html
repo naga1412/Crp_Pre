@@ -2062,11 +2062,13 @@ const App=()=>{
     if(fut.length){
       markers.push({time:fut[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'🔮 Predicted'});
       // Structure labels on ghost candles (skip impulse/continuation — already coloured)
-      const _structLabel={pullback:'↩Retrace',inside:'◇Inside',breakout:'⚡Break',pinbar:'📍PinBar',range:'↔Range'};
+      // Structure markers — shape only (no text) so they don't cover the ghost candles
+      // Color already encodes the pattern: orange=pullback, gray=inside, blue=breakout, purple=pinbar
+      const _structShape={pullback:'circle',inside:'circle',breakout:'arrowUp',pinbar:'circle',range:'circle'};
       fut.forEach((fc,i)=>{
         const pat=setup?.future_candles?.[i]?.patternType;
-        if(pat&&_structLabel[pat]){
-          markers.push({time:fc.time,position:fc.close>=fc.open?'belowBar':'aboveBar',color:_ghostCol(pat).borderColor,shape:'circle',text:_structLabel[pat]});
+        if(pat&&_structShape[pat]&&pat!=='impulse'&&pat!=='continuation'){
+          markers.push({time:fc.time,position:fc.close>=fc.open?'belowBar':'aboveBar',color:_ghostCol(pat).borderColor,shape:_structShape[pat],size:0.5});
         }
       });
     }
