@@ -1510,8 +1510,8 @@ function Sparkline({data,color,w=60,h=20}){
 // ─── AI CHAT TAB ─────────────────────────────────────────────────────────────
 function AIChatTab({marketContext}){
   const[apiKey,setApiKey]=useState(()=>localStorage.getItem('smc_ai_api_key')||'');
-  const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'anthropic');
-  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your AI assistant.\n\nI can:\n• Answer questions about the current market & signals\n• Explain any indicator or pattern\n• Modify the app code for you (add features, change colors, etc.)\n\nExamples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Add a volume spike alert to the chart"\n  "Make the ghost candles larger"'}]);
+  const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'gemini');
+  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your free AI assistant powered by Google Gemini.\n\nI can:\n• Answer questions about the current market & signals\n• Explain any indicator or pattern\n• Modify the app code for you (add features, change colors, etc.)\n\nExamples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Add a volume spike alert to the chart"\n  "Make the ghost candles larger"\n\n⬆️ Add your FREE Gemini API key above to get started.\nGet it free at aistudio.google.com → Get API Key (uses your Google account, no payment needed)'}]);
   const[input,setInput]=useState('');
   const[loading,setLoading]=useState(false);
   const[showKey,setShowKey]=useState(()=>!localStorage.getItem('smc_ai_api_key'));
@@ -1533,6 +1533,27 @@ function AIChatTab({marketContext}){
   };
 
   const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
+    // ── Google Gemini (FREE — 1500 req/day) ──
+    if(provider==='gemini'){
+      const model='gemini-2.0-flash'; // fast + free
+      const url=`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      // Build contents array: system prompt injected as first user turn (Gemini doesn't have separate system role in v1beta)
+      const hist=historyRef.current.slice(-10).map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
+      const contents=[
+        {role:'user',parts:[{text:systemPrompt+'\n\nUser message: '+userMsg}]},
+        ...hist.slice(1), // skip first since we merged system+user above
+      ];
+      // Simpler: just send full conversation with system baked into first message
+      const body={
+        contents:[{role:'user',parts:[{text:systemPrompt}]},{role:'model',parts:[{text:'Understood. I will follow these instructions.'}]},...hist,{role:'user',parts:[{text:userMsg}]}],
+        generationConfig:{maxOutputTokens:maxTokens,temperature:0.7}
+      };
+      const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`Gemini error ${r.status} — check your API key at aistudio.google.com`);}
+      const d=await r.json();
+      return d.candidates?.[0]?.content?.parts?.[0]?.text||'(no response)';
+    }
+    // ── OpenAI ──
     if(provider==='openai'){
       const r=await fetch('https://api.openai.com/v1/chat/completions',{
         method:'POST',
@@ -1542,7 +1563,7 @@ function AIChatTab({marketContext}){
       if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`OpenAI error ${r.status}`);}
       return(await r.json()).choices[0].message.content;
     }
-    // Anthropic
+    // ── Anthropic Claude ──
     const r=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',
       headers:{'content-type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-allow-browser':'true'},
@@ -1640,25 +1661,33 @@ Rules:
           <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
             <select value={provider} onChange={e=>{setProvider(e.target.value);localStorage.setItem('smc_ai_provider',e.target.value);}}
               style={{background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px'}}>
-              <option value="anthropic">Claude (Anthropic)</option>
+              <option value="gemini">🆓 Gemini (Google) — FREE</option>
               <option value="openai">GPT-4o (OpenAI)</option>
+              <option value="anthropic">Claude (Anthropic)</option>
             </select>
             <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
-              placeholder={provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
-              style={{flex:1,minWidth:200,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px',outline:'none'}}
+              placeholder={provider==='gemini'?'AIza... (from aistudio.google.com)':provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
+              style={{flex:1,minWidth:180,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px',outline:'none'}}
               onKeyDown={e=>{if(e.key==='Enter'){localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}}/>
             <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}
-              style={{background:'#2962ff',border:'none',borderRadius:4,color:'#fff',fontSize:11,padding:'5px 14px',cursor:'pointer',fontWeight:600}}>Connect</button>
+              style={{background:'#26a69a',border:'none',borderRadius:4,color:'#fff',fontSize:11,padding:'5px 14px',cursor:'pointer',fontWeight:600}}>Connect</button>
           </div>
-          <p style={{fontSize:10,color:'#787b86'}}>
-            Get key: <a href="https://console.anthropic.com" target="_blank" style={{color:'#2962ff'}}>Anthropic Console</a> or <a href="https://platform.openai.com/api-keys" target="_blank" style={{color:'#2962ff'}}>OpenAI Platform</a>
-          </p>
+          {provider==='gemini'&&<div style={{background:'#26a69a18',border:'1px solid #26a69a44',borderRadius:5,padding:'6px 10px',marginBottom:6}}>
+            <p style={{fontSize:11,color:'#26a69a',fontWeight:600,marginBottom:2}}>✅ Gemini 2.0 Flash — Completely FREE</p>
+            <p style={{fontSize:10,color:'#787b86'}}>1. Go to <a href="https://aistudio.google.com" target="_blank" style={{color:'#26a69a'}}>aistudio.google.com</a></p>
+            <p style={{fontSize:10,color:'#787b86'}}>2. Sign in with your <b style={{color:'#d1d4dc'}}>existing Google account</b></p>
+            <p style={{fontSize:10,color:'#787b86'}}>3. Click <b style={{color:'#d1d4dc'}}>"Get API Key"</b> → "Create API Key" → Copy</p>
+            <p style={{fontSize:10,color:'#787b86'}}>4. Paste above → Connect · <b style={{color:'#d1d4dc'}}>1,500 free requests/day</b></p>
+          </div>}
+          {provider!=='gemini'&&<p style={{fontSize:10,color:'#787b86'}}>
+            Get key: {provider==='anthropic'?<a href="https://console.anthropic.com" target="_blank" style={{color:'#2962ff'}}>Anthropic Console</a>:<a href="https://platform.openai.com/api-keys" target="_blank" style={{color:'#2962ff'}}>OpenAI Platform</a>}
+          </p>}
         </div>
       ):(
         <div style={{padding:'4px 12px',borderBottom:'1px solid #2a2e39',display:'flex',alignItems:'center',gap:8,fontSize:10,color:'#787b86',flexShrink:0}}>
           <span style={{color:'#26a69a',fontSize:8}}>●</span>
-          <span>{provider==='anthropic'?'Claude (Anthropic)':'GPT-4o (OpenAI)'} connected</span>
-          <span style={{color:'#2962ff',marginLeft:4,fontSize:9}}>{provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
+          <span>{provider==='gemini'?'Google Gemini':provider==='anthropic'?'Claude (Anthropic)':'GPT-4o (OpenAI)'} connected</span>
+          <span style={{color:provider==='gemini'?'#26a69a':'#2962ff',marginLeft:4,fontSize:9}}>{provider==='gemini'?'gemini-2.0-flash 🆓':provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
           <button onClick={()=>setShowKey(true)} style={{marginLeft:'auto',background:'none',border:'1px solid #2a2e39',color:'#787b86',cursor:'pointer',fontSize:9,padding:'2px 8px',borderRadius:3}}>Change Key</button>
         </div>
       )}
