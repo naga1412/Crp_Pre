@@ -1417,6 +1417,8 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const[filterConf,setFilterConf]=useState('all'); // all, CONFIRMED, PROBABLE, WEAK, DIVERGING
   const[favInput,setFavInput]=useState('');
   const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
+  const[scanLimit,setScanLimit]=useState(()=>{const v=parseInt(localStorage.getItem('smc_scan_limit')||'220');return isNaN(v)||v<1?220:Math.min(500,v);});
+  const[scanIntervalMin,setScanIntervalMin]=useState(()=>{const v=parseFloat(localStorage.getItem('smc_scan_interval_min')||'2');return isNaN(v)||v<=0?2:Math.min(60,v);});
   const[searchSuggs,setSearchSuggs]=useState([]);
   const[favSuggs,setFavSuggs]=useState([]);
   const[searchSuggOpen,setSearchSuggOpen]=useState(false);
@@ -1547,7 +1549,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const dynPool=(binanceSymbols||[]).filter(c=>c.symbol.endsWith('/USDT'));
       const dynSet=new Set(dynPool.map(c=>c.symbol));
       const extras=CRYPTO_LIST.filter(c=>!dynSet.has(c.symbol));
-      const cryptoPool=[...dynPool,...extras].slice(0,220); // cap at 220 to avoid overloading
+      const cryptoPool=[...dynPool,...extras].slice(0,Math.max(1,scanLimit)); // user-configurable cap
       cryptoPool.forEach(c=>{if(!seen.has(c.symbol)){seen.add(c.symbol);assets.push({sym:c.symbol,type:'crypto',name:c.name||c.symbol.split('/')[0]});}});
     }
     // Stocks: only if explicitly selected — crypto is the default
@@ -1574,14 +1576,15 @@ function ScannerTab({onNavigate,binanceSymbols}){
     setLastScan(new Date());
     setScanning(false);
     scanRef.current=false;
-  },[scanAsset,scanType,binanceSymbols,favorites]);
+  },[scanAsset,scanType,binanceSymbols,favorites,scanLimit]);
 
-  // Auto-scan on mount and every 2 minutes
+  // Auto-scan on mount and every N minutes (user-configurable)
   useEffect(()=>{
     runScan();
-    const id=setInterval(runScan,120000);
+    const ms=Math.max(10000,scanIntervalMin*60000); // enforce 10s floor to avoid API hammer
+    const id=setInterval(runScan,ms);
     return()=>clearInterval(id);
-  },[filterTf,scanType]);
+  },[filterTf,scanType,scanIntervalMin,scanLimit]);
 
   // Symbol pool for autocomplete (dynamic Binance + hardcoded CRYPTO_LIST)
   const symbolPool=useMemo(()=>{
@@ -1752,6 +1755,22 @@ function ScannerTab({onNavigate,binanceSymbols}){
         <select value={filterTf} onChange={e=>setFilterTf(e.target.value)}>
           {TIMEFRAMES.map(t=><option key={t} value={t}>{t}</option>)}
         </select>
+        {/* Scan limit — number of assets */}
+        <div style={{display:'flex',alignItems:'center',gap:3}} title="How many assets to scan (1-500). Fewer = faster scan + less API load.">
+          <span style={{fontSize:10,color:'#787b86'}}>📊</span>
+          <input type="number" min="1" max="500" step="1" value={scanLimit}
+            onChange={e=>{const v=Math.max(1,Math.min(500,parseInt(e.target.value)||1));setScanLimit(v);localStorage.setItem('smc_scan_limit',String(v));}}
+            style={{width:52,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'3px 6px',outline:'none',textAlign:'center'}}/>
+          <span style={{fontSize:9,color:'#787b86'}}>assets</span>
+        </div>
+        {/* Rescan interval — minutes */}
+        <div style={{display:'flex',alignItems:'center',gap:3}} title="Auto-rescan every N minutes (0.5-60). Lower = fresher data but more API calls.">
+          <span style={{fontSize:10,color:'#787b86'}}>⏱</span>
+          <input type="number" min="0.5" max="60" step="0.5" value={scanIntervalMin}
+            onChange={e=>{const v=Math.max(0.5,Math.min(60,parseFloat(e.target.value)||0.5));setScanIntervalMin(v);localStorage.setItem('smc_scan_interval_min',String(v));}}
+            style={{width:48,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'3px 6px',outline:'none',textAlign:'center'}}/>
+          <span style={{fontSize:9,color:'#787b86'}}>min</span>
+        </div>
         <select value={sortBy} onChange={e=>setSortBy(e.target.value)}>
           <option value="score">Strongest Signal</option>
           <option value="bullish">Most Bullish</option>
@@ -1781,7 +1800,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
         </div>
         <div style={{marginLeft:'auto'}} className="scan-status">
           {scanning&&<div style={{width:10,height:10,border:'2px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>}
-          {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='crypto'?'200+ crypto':scanType==='stocks'?'stocks':'crypto+stocks'}…</span>:
+          {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='crypto'?`${scanLimit} crypto`:scanType==='stocks'?'stocks':`${scanLimit} crypto+stocks`}…</span>:
             <span style={{color:'#26a69a'}}>✓ {scanResults.length} scanned</span>}
           {lastScan&&<span> · {lastScan.toLocaleTimeString()}</span>}
         </div>
