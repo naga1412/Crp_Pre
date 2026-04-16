@@ -770,7 +770,7 @@ async function _fsWrite(filename,data){
     const w=await fh.createWritable();
     await w.write(typeof data==='string'?data:JSON.stringify(data,null,2));
     await w.close();
-  }catch(_2){}
+  }catch(e){console.warn('[FS write failed]',filename,e?.message||e);}
 }
 async function _fsRead(filename){
   if(!_fsDirHandle) return null;
@@ -1996,7 +1996,9 @@ const App=()=>{
 
   // FS auto-connect on mount (re-uses permission from previous session)
   useEffect(()=>{
-    fsAutoConnect().then(ok=>{if(ok)setFsConnected(true);});
+    fsAutoConnect().then(async ok=>{
+      if(ok){setFsConnected(true);await fsSaveModel();}
+    });
   },[]);
 
   // Fetch candles + setup + train NN
@@ -2347,7 +2349,7 @@ const App=()=>{
                     {nnTraining&&<span style={{fontSize:9,color:'#ff9800'}}>⚡ Learning…</span>}
                     {fsConnected
                       ?<span style={{fontSize:9,color:'#26a69a',background:'#26a69a18',padding:'2px 6px',borderRadius:4,border:'1px solid #26a69a33'}} title="Model persisted to A:\\crypto_prediction_model">💾 Saved</span>
-                      :<button onClick={async()=>{const ok=await fsPickFolder();setFsConnected(ok);}} style={{fontSize:9,color:'#2962ff',background:'#2962ff15',padding:'2px 8px',borderRadius:4,border:'1px solid #2962ff44',cursor:'pointer'}}>📁 Connect A:\crypto_prediction_model</button>
+                      :<button onClick={async()=>{const ok=await fsPickFolder();setFsConnected(ok);if(ok){await fsSaveModel();try{const c=candles;const s=symbol;const t=tf;if(c&&c.length>0){await fsSaveTrainingBatch(s,t,c.length,_nnStats.accuracy);}}catch(_2){}}}} style={{fontSize:9,color:'#2962ff',background:'#2962ff15',padding:'2px 8px',borderRadius:4,border:'1px solid #2962ff44',cursor:'pointer'}}>📁 Connect A:\crypto_prediction_model</button>
                     }
                   </div>
                 </div>
