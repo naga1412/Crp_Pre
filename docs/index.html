@@ -1507,6 +1507,234 @@ function Sparkline({data,color,w=60,h=20}){
   return(<svg className="sparkline" width={w} height={h}><polyline points={pts} fill="none" stroke={color||'#787b86'} strokeWidth="1.5"/></svg>);
 }
 
+// ─── AI CHAT TAB ─────────────────────────────────────────────────────────────
+function AIChatTab({marketContext}){
+  const[apiKey,setApiKey]=useState(()=>localStorage.getItem('smc_ai_api_key')||'');
+  const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'anthropic');
+  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your AI assistant.\n\nI can:\n• Answer questions about the current market & signals\n• Explain any indicator or pattern\n• Modify the app code for you (add features, change colors, etc.)\n\nExamples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Add a volume spike alert to the chart"\n  "Make the ghost candles larger"'}]);
+  const[input,setInput]=useState('');
+  const[loading,setLoading]=useState(false);
+  const[showKey,setShowKey]=useState(()=>!localStorage.getItem('smc_ai_api_key'));
+  const endRef=useRef(null);
+  const historyRef=useRef([]);
+
+  useEffect(()=>{endRef.current?.scrollIntoView({behavior:'smooth'});},[messages]);
+
+  const addMsg=(role,content,extra={})=>{
+    setMessages(prev=>[...prev,{role,content,...extra}]);
+    if(role==='user') historyRef.current=[...historyRef.current,{role:'user',content}];
+    if(role==='assistant') historyRef.current=[...historyRef.current,{role:'assistant',content}];
+  };
+
+  const isCodeReq=(t)=>{
+    const lo=t.toLowerCase();
+    return /\b(add|remove|fix|change|update|modify|implement|create|make|build|hide|show|increase|decrease|adjust|enable|disable|replace|move|resize|rename)\b/.test(lo)&&
+           /\b(feature|button|indicator|alert|signal|chart|candle|scanner|tab|function|panel|display|color|style|layout|score|weight|threshold|interval|size|font|column|row|section|badge|label|icon|line|bar|overlay|ui|widget|column)\b/.test(lo);
+  };
+
+  const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
+    if(provider==='openai'){
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{
+        method:'POST',
+        headers:{'content-type':'application/json','Authorization':`Bearer ${apiKey}`},
+        body:JSON.stringify({model:'gpt-4o-mini',max_tokens:maxTokens,messages:[{role:'system',content:systemPrompt},...historyRef.current.slice(-10),{role:'user',content:userMsg}]})
+      });
+      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`OpenAI error ${r.status}`);}
+      return(await r.json()).choices[0].message.content;
+    }
+    // Anthropic
+    const r=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'content-type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-allow-browser':'true'},
+      body:JSON.stringify({model:'claude-3-5-haiku-20241022',max_tokens:maxTokens,system:systemPrompt,messages:[...historyRef.current.slice(-10),{role:'user',content:userMsg}]})
+    });
+    if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`Anthropic error ${r.status}`);}
+    return(await r.json()).content[0].text;
+  };
+
+  const doMarketQ=async(q)=>{
+    const ctx=marketContext||{};
+    const sys=`You are an expert AI trading assistant inside SMC Pro Analyzer (crypto & stock analysis app).
+
+Current live market state:
+- Symbol: ${ctx.symbol||'?'} | Timeframe: ${ctx.tf||'?'}
+- Price: ${ctx.price||'?'}
+- Master Bias Score: ${ctx.biasScore||0} → ${ctx.biasLabel||'?'} | AI Signal: ${ctx.aiSignal||'?'}${ctx.aiOverride?' (NN overrode indicators)':''}
+- NN Prediction: prob=${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(0)+'%':'?'} | live accuracy=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% | corrections=${ctx.nnCorrections||0}
+- RSI(14): ${ctx.rsi||'?'} | StochRSI K: ${ctx.stochK||'?'} | MACD hist: ${ctx.macdHist||'?'} | CMF: ${ctx.cmf||'?'}
+- Wyckoff Phase: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'}
+- Volume Profile: POC=${ctx.poc||'?'} | VAH=${ctx.vah||'?'} | VAL=${ctx.val||'?'}
+- Stop Loss: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
+- OI Funding Rate: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
+
+Answer concisely and specifically. Be actionable. Under 300 words.`;
+    const ans=await callLLM(sys,q);
+    addMsg('assistant',ans);
+  };
+
+  const doCodeMod=async(req)=>{
+    addMsg('assistant',`📁 To modify the app I need to read **index.html**.\n\nClick the button below to select it — it's in the \`docs/\` folder of your project.`,{type:'fileReq',req});
+  };
+
+  const applyCode=async(req,fh)=>{
+    try{
+      addMsg('assistant','📖 Reading current code...');
+      const f=await fh.getFile();
+      const code=await f.text();
+      const kb=Math.round(code.length/1000);
+      addMsg('assistant',`🧠 Sending ${kb}KB to AI... Please wait 30-60 seconds.`);
+      const sys=`You are a precise code modification AI for a single-file React trading app (SMC Pro Analyzer).
+Stack: React 18 UMD, Babel standalone JSX (in-browser), Tailwind CSS CDN, LightweightCharts 4.1.1.
+Dark theme: bg=#131722, panel=#1e222d, border=#2a2e39, bull=#26a69a, bear=#ef5350, blue=#2962ff.
+
+User request: "${req}"
+
+Rules:
+1. Make ONLY the requested change. Touch nothing else.
+2. Return the COMPLETE file from <!DOCTYPE html> to </html>.
+3. Wrap output in \`\`\`html\\n...\\n\`\`\` — nothing before or after.`;
+      const res=await callLLM(sys,`Here is the full app code:\n\`\`\`html\n${code}\n\`\`\`\n\nApply this change: ${req}`,8192);
+      const m=res.match(/```html\s*([\s\S]*?)```/);
+      if(!m||m[1].length<5000||!m[1].includes('<!DOCTYPE')){
+        throw new Error('AI returned incomplete code. Try a simpler/more specific request.');
+      }
+      const w=await fh.createWritable();
+      await w.write(m[1].trim());
+      await w.close();
+      addMsg('assistant',`✅ **Done! Changes saved.**\n\nPress **Ctrl+R** (or F5) to reload and see the update.\n\n_Applied: ${req}_`,{type:'success'});
+    }catch(e){
+      addMsg('assistant',`❌ Failed: ${e.message}`);
+    }
+  };
+
+  const send=async()=>{
+    const t=input.trim();
+    if(!t||loading) return;
+    if(!apiKey){addMsg('assistant','⚠️ Please enter your API key first (click the key icon above).');return;}
+    setInput('');
+    addMsg('user',t);
+    setLoading(true);
+    try{
+      if(isCodeReq(t)) await doCodeMod(t);
+      else await doMarketQ(t);
+    }catch(e){addMsg('assistant',`❌ ${e.message}`);}
+    finally{setLoading(false);}
+  };
+
+  // ── Suggestion chips ──
+  const chips=[
+    'Should I go long or short?',
+    'What does RSI say?',
+    'Explain the current signal',
+    'Is this a good entry zone?',
+    'Add RSI alert when above 70',
+    'Make ghost candles bigger',
+  ];
+
+  return(
+    <div style={{display:'flex',flexDirection:'column',height:'100%',background:'#131722',overflow:'hidden'}}>
+      {/* API key bar */}
+      {showKey?(
+        <div style={{padding:'10px 14px',borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0}}>
+          <p style={{fontSize:11,color:'#787b86',marginBottom:6}}>🔑 API Key required — stored only in your browser</p>
+          <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
+            <select value={provider} onChange={e=>{setProvider(e.target.value);localStorage.setItem('smc_ai_provider',e.target.value);}}
+              style={{background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px'}}>
+              <option value="anthropic">Claude (Anthropic)</option>
+              <option value="openai">GPT-4o (OpenAI)</option>
+            </select>
+            <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
+              placeholder={provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
+              style={{flex:1,minWidth:200,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px',outline:'none'}}
+              onKeyDown={e=>{if(e.key==='Enter'){localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}}/>
+            <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}
+              style={{background:'#2962ff',border:'none',borderRadius:4,color:'#fff',fontSize:11,padding:'5px 14px',cursor:'pointer',fontWeight:600}}>Connect</button>
+          </div>
+          <p style={{fontSize:10,color:'#787b86'}}>
+            Get key: <a href="https://console.anthropic.com" target="_blank" style={{color:'#2962ff'}}>Anthropic Console</a> or <a href="https://platform.openai.com/api-keys" target="_blank" style={{color:'#2962ff'}}>OpenAI Platform</a>
+          </p>
+        </div>
+      ):(
+        <div style={{padding:'4px 12px',borderBottom:'1px solid #2a2e39',display:'flex',alignItems:'center',gap:8,fontSize:10,color:'#787b86',flexShrink:0}}>
+          <span style={{color:'#26a69a',fontSize:8}}>●</span>
+          <span>{provider==='anthropic'?'Claude (Anthropic)':'GPT-4o (OpenAI)'} connected</span>
+          <span style={{color:'#2962ff',marginLeft:4,fontSize:9}}>{provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
+          <button onClick={()=>setShowKey(true)} style={{marginLeft:'auto',background:'none',border:'1px solid #2a2e39',color:'#787b86',cursor:'pointer',fontSize:9,padding:'2px 8px',borderRadius:3}}>Change Key</button>
+        </div>
+      )}
+
+      {/* Messages */}
+      <div style={{flex:1,overflowY:'auto',padding:12}}>
+        {messages.map((msg,i)=>{
+          const isUser=msg.role==='user';
+          return(
+            <div key={i} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:8,marginBottom:12,alignItems:'flex-start'}}>
+              <div style={{width:26,height:26,borderRadius:'50%',flexShrink:0,background:isUser?'#2962ff':'#1e222d',border:`1px solid ${isUser?'#2962ff':'#2a2e39'}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11}}>
+                {isUser?'👤':'🤖'}
+              </div>
+              <div style={{maxWidth:'82%',background:isUser?'#2962ff22':'#1e222d',border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
+                {msg.content}
+                {msg.type==='fileReq'&&(
+                  <button onClick={async()=>{
+                    try{
+                      const[fh]=await window.showOpenFilePicker({types:[{description:'HTML',accept:{'text/html':['.html']}}]});
+                      setLoading(true);
+                      addMsg('assistant',`📂 ${fh.name} selected — applying change...`);
+                      await applyCode(msg.req,fh);
+                    }catch(e){if(e.name!=='AbortError')addMsg('assistant',`❌ ${e.message}`);}
+                    finally{setLoading(false);}
+                  }} style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                    📂 Select index.html
+                  </button>
+                )}
+                {msg.type==='success'&&(
+                  <button onClick={()=>location.reload()} style={{display:'block',marginTop:8,background:'#26a69a',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                    🔄 Reload Now
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        {loading&&(
+          <div style={{display:'flex',alignItems:'center',gap:8,color:'#787b86',fontSize:11,padding:'4px 0 4px 34px'}}>
+            <span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>⚙️</span> AI is thinking…
+          </div>
+        )}
+        <div ref={endRef}/>
+      </div>
+
+      {/* Quick chips */}
+      {messages.length<3&&(
+        <div style={{padding:'6px 12px',display:'flex',gap:5,flexWrap:'wrap',borderTop:'1px solid #2a2e39',flexShrink:0}}>
+          {chips.map(c=>(
+            <button key={c} onClick={()=>{setInput(c);}} style={{background:'#1e222d',border:'1px solid #2a2e39',borderRadius:12,padding:'4px 10px',color:'#d1d4dc',fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      <div style={{padding:'10px 12px',borderTop:'1px solid #2a2e39',background:'#1e222d',flexShrink:0}}>
+        <div style={{display:'flex',gap:6}}>
+          <textarea value={input} onChange={e=>setInput(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}}
+            placeholder='Ask about the market… or type a code change (e.g. "add RSI overbought alert")'
+            rows={2}
+            style={{flex:1,background:'#131722',border:'1px solid #2a2e39',borderRadius:6,color:'#d1d4dc',fontSize:12,padding:'7px 10px',resize:'none',outline:'none',fontFamily:'Inter,sans-serif',lineHeight:1.5}}
+          />
+          <button onClick={send} disabled={loading||!input.trim()}
+            style={{background:loading||!input.trim()?'#2a2e39':'#2962ff',border:'none',borderRadius:6,color:'#fff',cursor:loading||!input.trim()?'default':'pointer',padding:'0 14px',fontSize:16,flexShrink:0,transition:'background .2s'}}>
+            ➤
+          </button>
+        </div>
+        <p style={{fontSize:9,color:'#787b86',marginTop:4}}>Enter=send · Shift+Enter=newline · Market Q&A (instant) · Code changes (selects index.html → auto-applies)</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── SIGNAL SCANNER TAB ──────────────────────────────────────────────────────
 function ScannerTab({onNavigate,binanceSymbols}){
   const[scanResults,setScanResults]=useState([]);
@@ -2507,6 +2735,7 @@ const App=()=>{
         <div style={{display:'flex',gap:0,marginRight:4,flexShrink:0}}>
           <button className={`tab-btn ${activeTab==='chart'?'active':''}`} onClick={()=>setActiveTab('chart')}>📊 Chart</button>
           <button className={`tab-btn ${activeTab==='scanner'?'active':''}`} onClick={()=>setActiveTab('scanner')}>🔍 Scanner</button>
+          <button className={`tab-btn ${activeTab==='ai'?'active':''}`} onClick={()=>setActiveTab('ai')}>🤖 AI Chat</button>
         </div>
         {activeTab==='chart'&&<>
           <button onClick={()=>setShowSearch(true)} style={{display:'flex',alignItems:'center',gap:6,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'4px 10px',color:'#d1d4dc',cursor:'pointer',fontSize:13,fontWeight:600,flexShrink:0}}>
@@ -2531,7 +2760,7 @@ const App=()=>{
             {error?'Error':wsStatus==='live'?'Live':wsStatus==='delayed'?'Delayed':'…'}
           </div>
         </>}
-        {activeTab==='scanner'&&<div style={{flex:1}}/>}
+        {(activeTab==='scanner'||activeTab==='ai')&&<div style={{flex:1}}/>}
       </header>
 
       {/* WORKSPACE */}
@@ -2540,6 +2769,22 @@ const App=()=>{
         <div style={{display:activeTab==='scanner'?'flex':'none',flex:1,overflow:'hidden'}}>
           <ScannerTab binanceSymbols={binanceSymbols} onNavigate={(sym,t)=>{setSymbol(sym);setTf(t);setActiveTab('chart');}}/>
         </div>
+        {/* AI Chat tab */}
+        {activeTab==='ai'&&(
+          <div style={{flex:1,overflow:'hidden'}}>
+            <AIChatTab marketContext={{
+              symbol,tf,price:livePrice,
+              biasScore:aiAdjustedBias?.score,biasLabel:aiAdjustedBias?.label,
+              aiSignal:aiAdjustedBias?.aiSignal,aiOverride:aiAdjustedBias?.aiOverride,
+              rsi:setup?.rsi,phase:setup?.phase,confidence:setup?.confidence,
+              poc:setup?.vp_poc,vah:setup?.vp_vah,val:setup?.vp_val,
+              sl:setup?.stop_loss,tp1:setup?.take_profit_1,tp2:setup?.take_profit_2,
+              nnProb:nnResult?.prob,nnAcc:nnResult?.accuracy,nnRecentAcc:nnResult?.recentAcc,nnCorrections:nnResult?.corrections,
+              macdHist:momentumSig?.signals?.macd?.hist,stochK:momentumSig?.signals?.stoch?.k,cmf:momentumSig?.signals?.cmf?.value,
+              fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label
+            }}/>
+          </div>
+        )}
         {/* Chart + Panel — always mounted, hidden via display */}
         <div style={{display:activeTab==='chart'?'flex':'none',flex:1,overflow:'hidden'}}>
         {/* Chart */}
