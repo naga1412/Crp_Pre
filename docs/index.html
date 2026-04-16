@@ -1534,24 +1534,43 @@ function AIChatTab({marketContext}){
 
   const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
     // ── Google Gemini (FREE — 1500 req/day) ──
+    // Try models in order: 1.5-flash (most stable free tier) → 2.0-flash → 1.5-pro
     if(provider==='gemini'){
-      const model='gemini-2.0-flash'; // fast + free
-      const url=`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      // Build contents array: system prompt injected as first user turn (Gemini doesn't have separate system role in v1beta)
+      const GEMINI_MODELS=['gemini-1.5-flash','gemini-2.0-flash-lite','gemini-1.5-pro'];
       const hist=historyRef.current.slice(-10).map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
-      const contents=[
-        {role:'user',parts:[{text:systemPrompt+'\n\nUser message: '+userMsg}]},
-        ...hist.slice(1), // skip first since we merged system+user above
-      ];
-      // Simpler: just send full conversation with system baked into first message
+      // Ensure history alternates correctly (Gemini requires user/model alternation)
+      const safeHist=[];
+      for(const h of hist){
+        if(safeHist.length&&safeHist[safeHist.length-1].role===h.role) continue; // skip consecutive same role
+        safeHist.push(h);
+      }
       const body={
-        contents:[{role:'user',parts:[{text:systemPrompt}]},{role:'model',parts:[{text:'Understood. I will follow these instructions.'}]},...hist,{role:'user',parts:[{text:userMsg}]}],
+        contents:[
+          {role:'user',parts:[{text:systemPrompt}]},
+          {role:'model',parts:[{text:'Understood. I will follow these instructions exactly.'}]},
+          ...safeHist,
+          {role:'user',parts:[{text:userMsg}]}
+        ],
         generationConfig:{maxOutputTokens:maxTokens,temperature:0.7}
       };
-      const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-      if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`Gemini error ${r.status} — check your API key at aistudio.google.com`);}
-      const d=await r.json();
-      return d.candidates?.[0]?.content?.parts?.[0]?.text||'(no response)';
+      let lastErr='';
+      for(const model of GEMINI_MODELS){
+        const url=`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        try{
+          const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+          if(r.status===429||r.status===403){
+            const e=await r.json().catch(()=>({}));
+            lastErr=e?.error?.message||`quota exceeded on ${model}`;
+            continue; // try next model
+          }
+          if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(e?.error?.message||`Gemini error ${r.status}`);}
+          const d=await r.json();
+          const txt=d.candidates?.[0]?.content?.parts?.[0]?.text;
+          if(!txt) continue;
+          return txt;
+        }catch(e){lastErr=e.message;if(!e.message.includes('quota')&&!e.message.includes('429'))throw e;}
+      }
+      throw new Error(`All Gemini models quota exceeded.\n${lastErr}\n\nFix: Go to aistudio.google.com → Rate Limits → check your project has free tier enabled.`);
     }
     // ── OpenAI ──
     if(provider==='openai'){
@@ -1687,7 +1706,7 @@ Rules:
         <div style={{padding:'4px 12px',borderBottom:'1px solid #2a2e39',display:'flex',alignItems:'center',gap:8,fontSize:10,color:'#787b86',flexShrink:0}}>
           <span style={{color:'#26a69a',fontSize:8}}>●</span>
           <span>{provider==='gemini'?'Google Gemini':provider==='anthropic'?'Claude (Anthropic)':'GPT-4o (OpenAI)'} connected</span>
-          <span style={{color:provider==='gemini'?'#26a69a':'#2962ff',marginLeft:4,fontSize:9}}>{provider==='gemini'?'gemini-2.0-flash 🆓':provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
+          <span style={{color:provider==='gemini'?'#26a69a':'#2962ff',marginLeft:4,fontSize:9}}>{provider==='gemini'?'gemini-1.5-flash 🆓':provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
           <button onClick={()=>setShowKey(true)} style={{marginLeft:'auto',background:'none',border:'1px solid #2a2e39',color:'#787b86',cursor:'pointer',fontSize:9,padding:'2px 8px',borderRadius:3}}>Change Key</button>
         </div>
       )}
