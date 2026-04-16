@@ -2055,13 +2055,7 @@ const App=()=>{
         }
       });
     }
-    (nd?.news||[]).forEach(n=>{
-      if(!n.timestamp)return;
-      const nt=Math.floor(new Date(n.timestamp).getTime()/1000);
-      let closest=null,minD=Infinity;
-      for(const c of merged){const d=Math.abs(c.time-nt);if(d<minD&&d<=delta*2){minD=d;closest=c.time;}}
-      if(closest) markers.push({time:closest,position:n.sentiment==='bullish'?'belowBar':'aboveBar',color:n.sentiment==='bullish'?'#26a69a':n.sentiment==='bearish'?'#ef5350':'#787b86',shape:'square',text:'📰'});
-    });
+    // News markers removed from chart — cluttered candle view
     markers.sort((a,b)=>a.time-b.time);
     cSeries.current.setMarkers(markers);
     if(hist.length) setPrevClose(hist[hist.length-1].close);
