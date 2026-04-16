@@ -2101,6 +2101,44 @@ const App=()=>{
     });
   },[]);
 
+  // Background validation: after every chart load, silently check ALL pending
+  // predictions regardless of which symbol/TF they belong to.
+  // Fetches 100 candles for each unique symbol+TF that has unvalidated predictions,
+  // runs validatePendingPredictions on them, and immediately retrains on any mistakes.
+  const backgroundValidateAll=useCallback(async(currentSym,currentTf)=>{
+    try{
+      const pending=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
+      // Collect unique symbol+TF combos that still have unvalidated predictions
+      // — skip the current chart (already validated in the main load flow)
+      const seen=new Set();
+      const toCheck=[];
+      pending.forEach(p=>{
+        if(p.validated) return;
+        const key=`${p.symbol}|${p.tf}`;
+        if(seen.has(key)) return;
+        if(p.symbol===currentSym&&p.tf===currentTf) return; // already handled
+        seen.add(key);
+        toCheck.push({symbol:p.symbol,tf:p.tf});
+      });
+      if(!toCheck.length) return;
+      // Fetch + validate each — staggered 300ms apart to avoid API flood
+      for(const {symbol,tf} of toCheck){
+        await new Promise(r=>setTimeout(r,300));
+        try{
+          const candles=await fetchCandles(symbol,tf,100);
+          if(candles&&candles.length>10){
+            const res=validatePendingPredictions(candles,symbol,tf);
+            if(res.validated>0){
+              validateNewsReactions(candles,symbol);
+            }
+          }
+        }catch(_2){}
+      }
+      // After all background validations done, save updated model if corrections changed
+      await fsSaveModel();
+    }catch(_2){}
+  },[]);
+
   // Fetch candles + setup + train NN
   const load=useCallback(async(sym,t,quiet=false)=>{
     if(!quiet)setLoading(true);
@@ -2129,6 +2167,9 @@ const App=()=>{
             const pred=runNNPredict(data,sym,t);
             setNnResult(pred);
             if(pred) await fsLogPrediction(sym,t,pred);
+            // Step 4: Background — validate ALL other symbols that have pending predictions
+            // (runs silently after current chart is fully loaded, non-blocking)
+            backgroundValidateAll(sym,t);
           }catch(_2){}
           setNnTraining(false);
         },50);
