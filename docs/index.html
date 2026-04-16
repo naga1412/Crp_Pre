@@ -526,6 +526,13 @@ function _buildLabels(candles,idx){
 // Train on fresh candle batch + merge stored correction samples for self-correction
 function trainNNOnCandles(candles){
   if(!candles||candles.length<SEQ_LEN+40) return null;
+  // Skip if candle count hasn't grown by at least 2 since last training
+  // (prevents redundant training when you switch back to same chart quickly)
+  const lastCount=_nnStats._lastTrainCandleCount||0;
+  const newCount=candles.length;
+  const hasFreshCorrections=(()=>{try{const s=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');return s.some(o=>o.validated&&o.wrongDirection&&!o._trained);}catch(_2){return false;}})();
+  if(newCount-lastCount<2&&!hasFreshCorrections) return null; // nothing new to learn
+  _nnStats._lastTrainCandleCount=newCount;
   const net=_getNN();
   const data=[];
   // Build training pairs from current batch
@@ -541,10 +548,11 @@ function trainNNOnCandles(candles){
   try{
     const stored=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
     const corrections=stored.filter(o=>o.validated&&o.wrongDirection).slice(-150);
-    corrections.forEach(o=>{if(o.input&&o.actualLabels) data.push({input:o.input,output:o.actualLabels,weight:5});});
+    corrections.forEach(o=>{if(o.input&&o.actualLabels){data.push({input:o.input,output:o.actualLabels,weight:5});o._trained=true;}});
+    if(corrections.length) localStorage.setItem(_NN_OUTCOMES_KEY,JSON.stringify(stored));
   }catch(_2){}
-  // Train
-  net.train(data,0.02,50);
+  // Train — 20 epochs is enough for convergence; 50 was the main browser lag cause
+  net.train(data,0.02,20);
   // Accuracy on direction head
   let correct=0;
   data.forEach(d=>{const out=net.predict(d.input);if((out[0]>=0.5?1:0)===d.output[0])correct++;});
@@ -648,7 +656,7 @@ function validatePendingPredictions(candles,symbol,tf){
       if(wrongSamples.length>0){
         try{
           const net=_getNN();
-          net.train(wrongSamples,0.03,20);  // higher LR, fewer epochs — targeted correction
+          net.train(wrongSamples,0.03,8);  // targeted correction — 8 epochs is plenty at 3x LR
           _nnStats.immediateRetrains=(_nnStats.immediateRetrains||0)+1;
           localStorage.setItem(_NN_KEY,JSON.stringify(net.toJSON()));
         }catch(_3){}
@@ -2101,53 +2109,63 @@ const App=()=>{
     });
   },[]);
 
-  // Background validation: after every chart load, silently check ALL pending
-  // predictions regardless of which symbol/TF they belong to.
-  // Fetches 100 candles for each unique symbol+TF that has unvalidated predictions,
-  // runs validatePendingPredictions on them, and immediately retrains on any mistakes.
+  // Background validation — throttled: runs at most once per 5 minutes,
+  // processes max 5 symbols per run, 500ms apart to stay off the API radar.
+  const _bgValidateLastRun=React.useRef(0);
   const backgroundValidateAll=useCallback(async(currentSym,currentTf)=>{
+    const now=Date.now();
+    if(now-_bgValidateLastRun.current<5*60*1000) return; // 5-min cooldown
+    _bgValidateLastRun.current=now;
     try{
       const pending=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
-      // Collect unique symbol+TF combos that still have unvalidated predictions
-      // — skip the current chart (already validated in the main load flow)
       const seen=new Set();
       const toCheck=[];
-      pending.forEach(p=>{
-        if(p.validated) return;
+      for(const p of pending){
+        if(p.validated) continue;
         const key=`${p.symbol}|${p.tf}`;
-        if(seen.has(key)) return;
-        if(p.symbol===currentSym&&p.tf===currentTf) return; // already handled
+        if(seen.has(key)) continue;
+        if(p.symbol===currentSym&&p.tf===currentTf) continue;
         seen.add(key);
         toCheck.push({symbol:p.symbol,tf:p.tf});
-      });
+        if(toCheck.length>=5) break; // cap at 5 per run — prevents API flood
+      }
       if(!toCheck.length) return;
-      // Fetch + validate each — staggered 300ms apart to avoid API flood
       for(const {symbol,tf} of toCheck){
-        await new Promise(r=>setTimeout(r,300));
+        await new Promise(r=>setTimeout(r,500)); // 500ms gap — less aggressive
         try{
-          const candles=await fetchCandles(symbol,tf,100);
+          const candles=await fetchCandles(symbol,tf,80); // 80 candles is enough
           if(candles&&candles.length>10){
             const res=validatePendingPredictions(candles,symbol,tf);
-            if(res.validated>0){
-              validateNewsReactions(candles,symbol);
-            }
+            if(res.validated>0) validateNewsReactions(candles,symbol);
           }
         }catch(_2){}
       }
-      // After all background validations done, save updated model if corrections changed
       await fsSaveModel();
     }catch(_2){}
   },[]);
 
   // Fetch candles + setup + train NN
+  const _lastCandleTs=React.useRef(0); // track last candle timestamp to skip redundant TA
   const load=useCallback(async(sym,t,quiet=false)=>{
     if(!quiet)setLoading(true);
     setError(null);
     try{
-      const data=await fetchCandles(sym,t,600);
-      setCandles(data);
-      setLivePrice(data[data.length-1]?.close||null);
-      const s=generateSetup(data,data[data.length-1]?.close);
+      // Quiet polls: fetch fewer candles (just enough for live price + new candle check)
+      const fetchCount=quiet?100:600;
+      const data=await fetchCandles(sym,t,fetchCount);
+      const lastTs=data[data.length-1]?.timestamp||0;
+      const liveClose=data[data.length-1]?.close||null;
+      setLivePrice(liveClose);
+      // Quiet poll: if the latest candle timestamp hasn't changed, only update price
+      // — skip heavy generateSetup TA re-run (saves ~40ms per 30s tick)
+      if(quiet&&lastTs===_lastCandleTs.current){
+        return; // price already updated above; candles/setup unchanged
+      }
+      _lastCandleTs.current=lastTs;
+      // Full candle fetch needed when new candle formed or non-quiet load
+      const fullData=quiet?await fetchCandles(sym,t,600):data;
+      setCandles(fullData);
+      const s=generateSetup(fullData,liveClose);
       setSetup(s);
       // ── Deep Learning Supervisor: self-correct → train → predict ──
       if(!quiet){
@@ -2155,16 +2173,16 @@ const App=()=>{
         setTimeout(async()=>{
           try{
             // Step 1: Self-correction — validate past predictions with new data
-            validatePendingPredictions(data,sym,t);
-            validateNewsReactions(data,sym);
+            validatePendingPredictions(fullData,sym,t);
+            validateNewsReactions(fullData,sym);
             // Step 2: Train (includes correction samples with 3x weight)
-            const trainResult=trainNNOnCandles(data);
+            const trainResult=trainNNOnCandles(fullData);
             if(trainResult){
               await fsSaveModel();
               await fsSaveTrainingBatch(sym,t,trainResult.batchSize,trainResult.accuracy);
             }
             // Step 3: Predict for current candle — logged for future validation
-            const pred=runNNPredict(data,sym,t);
+            const pred=runNNPredict(fullData,sym,t);
             setNnResult(pred);
             if(pred) await fsLogPrediction(sym,t,pred);
             // Step 4: Background — validate ALL other symbols that have pending predictions
