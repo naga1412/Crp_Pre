@@ -2294,16 +2294,13 @@ const App=()=>{
     }catch(_){}
   },[setup]);
 
-  // VP canvas histogram overlay
-  useEffect(()=>{
-    // Delay so LightweightCharts finishes rendering its own canvases first
-    const timer=setTimeout(()=>{
+  // VP canvas drawing function — extracted so it can be called on EVERY viewport change
+  const drawVPCanvas=useCallback(()=>{
     const canvas=vpCanvasRef.current;
-    if(!canvas) return;
+    if(!canvas||!cSeries.current) return;
     const ctx=canvas.getContext('2d');
     if(!ctx) return;
     try{
-      // Use chartRef dimensions — the actual rendered chart container
       const W=chartRef.current?.clientWidth||canvas.parentElement?.clientWidth||0;
       const H=chartRef.current?.clientHeight||canvas.parentElement?.clientHeight||0;
       if(!W||!H) return;
@@ -2313,17 +2310,14 @@ const App=()=>{
       ctx.scale(dpr,dpr);
       ctx.clearRect(0,0,W,H);
       const vp=setup?.vp;
-      if(!vp||!cSeries.current) return;
+      if(!vp) return;
       const{vols,minP,bSz,pocIdx,inVA}=vp;
       const numBuckets=vols.length;
       const maxVol=Math.max(...vols);
       if(!maxVol) return;
-      // Price axis takes ~65px on the right — draw bars to the LEFT of it
       const priceAxisW=68;
       const barMaxW=Math.min(W*0.20,110);
-      // Bar height based on chart height divided by bucket count — fills chart evenly
       const barH=Math.max(2,Math.floor(H/numBuckets));
-      // Draw thin separator line between VP bars and price axis
       ctx.globalAlpha=0.25;
       ctx.strokeStyle='#2a2e39';
       ctx.lineWidth=1;
@@ -2331,40 +2325,63 @@ const App=()=>{
       for(let i=0;i<numBuckets;i++){
         if(!vols[i]) continue;
         const priceMid=minP+(i+0.5)*bSz;
+        // priceToCoordinate maps price → current viewport Y — called on EVERY draw so always correct
         const yCenter=cSeries.current.priceToCoordinate(priceMid);
         if(yCenter==null||yCenter<0||yCenter>H) continue;
         const barW=Math.max(3,(vols[i]/maxVol)*barMaxW);
         const isPoc=i===pocIdx;
         const isHVN=vp.hvn&&vp.hvn.some(h=>Math.abs(h-priceMid)<bSz);
-        // Semi-transparent so candles/prediction show through clearly
         ctx.globalAlpha=isPoc?0.85:inVA[i]?0.45:isHVN?0.55:0.22;
         ctx.fillStyle=isPoc?'#ff9800':isHVN?'#ffd600':inVA[i]?'rgba(41,98,255,1)':'rgba(84,110,122,1)';
-        // Bars grow leftward from the price axis
-        ctx.fillRect(W-priceAxisW-barW, yCenter-barH/2, barW, Math.max(2,barH));
+        ctx.fillRect(W-priceAxisW-barW,yCenter-barH/2,barW,Math.max(2,barH));
       }
-      // Draw POC / VAH / VAL horizontal lines directly on canvas too (belt-and-suspenders)
       const drawHLine=(price,color,dash,label)=>{
         const y=cSeries.current.priceToCoordinate(price);
         if(y==null||y<0||y>H) return;
-        ctx.globalAlpha=0.9;
-        ctx.strokeStyle=color;
-        ctx.lineWidth=1.5;
+        ctx.globalAlpha=0.9;ctx.strokeStyle=color;ctx.lineWidth=1.5;
         ctx.setLineDash(dash);
         ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W-priceAxisW,y);ctx.stroke();
         ctx.setLineDash([]);
-        ctx.globalAlpha=0.95;
-        ctx.fillStyle=color;
-        ctx.font='bold 9px Inter,sans-serif';
-        ctx.fillText(label,4,y-3);
+        ctx.globalAlpha=0.95;ctx.fillStyle=color;
+        ctx.font='bold 9px Inter,sans-serif';ctx.fillText(label,4,y-3);
       };
-      drawHLine(vp.poc,'#ff9800',[],'POC');
-      drawHLine(vp.vah,'#26a69a',[4,3],'VAH');
-      drawHLine(vp.val,'#ef5350',[4,3],'VAL');
+      if(vp.poc) drawHLine(vp.poc,'#ff9800',[],'POC');
+      if(vp.vah) drawHLine(vp.vah,'#26a69a',[4,3],'VAH');
+      if(vp.val) drawHLine(vp.val,'#ef5350',[4,3],'VAL');
       ctx.globalAlpha=1;
     }catch(_){}
-    },120); // wait 120ms for LightweightCharts to finish rendering
-    return()=>clearTimeout(timer);
-  },[setup,candles]);
+  },[setup]);
+
+  // Draw VP on data change (initial draw after setup updates)
+  useEffect(()=>{
+    const t=setTimeout(drawVPCanvas,120);
+    return()=>clearTimeout(t);
+  },[setup,candles,drawVPCanvas]);
+
+  // Subscribe to chart pan / zoom / scroll — redraw VP on every viewport change
+  // This is the KEY fix: priceToCoordinate gives the CURRENT viewport Y,
+  // so we must redraw whenever the user pans/zooms otherwise bars stay frozen.
+  const _vpDrawRef=useRef(drawVPCanvas);
+  _vpDrawRef.current=drawVPCanvas;
+  useEffect(()=>{
+    if(!chartInst.current) return;
+    const handler=()=>_vpDrawRef.current();
+    // Horizontal pan / zoom
+    chartInst.current.timeScale().subscribeVisibleLogicalRangeChange(handler);
+    // Vertical pan (price axis drag) and mouse-wheel zoom
+    const el=chartRef.current;
+    if(el){
+      el.addEventListener('wheel',handler,{passive:true});
+      el.addEventListener('mouseup',handler);
+      el.addEventListener('touchend',handler);
+    }
+    return()=>{
+      try{chartInst.current?.timeScale().unsubscribeVisibleLogicalRangeChange(handler);}catch(_){}
+      el?.removeEventListener('wheel',handler);
+      el?.removeEventListener('mouseup',handler);
+      el?.removeEventListener('touchend',handler);
+    };
+  },[]);
 
   const momentumSig=useMemo(()=>calcMomentumScore(candles),[candles]);
   const microSig=useMemo(()=>calcMicrostructureScore(candles),[candles]);
