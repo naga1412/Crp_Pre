@@ -2351,6 +2351,43 @@ const App=()=>{
 
   const masterBias=useMemo(()=>calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price),[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price]);
 
+  // ── AI SUPERVISOR ADJUSTMENT ──
+  // Blends NN probability into Master Bias Score.
+  // Weight grows with NN confidence × validated accuracy.
+  // When NN strongly disagrees with indicators, it pulls the final signal.
+  const aiAdjustedBias=useMemo(()=>{
+    if(!masterBias) return null;
+    if(!nnResult||nnResult.totalCandles<150) return{...masterBias,rawScore:masterBias.score,aiWeight:0,aiOverride:false,aiSignal:masterBias.score>=8?'LONG':masterBias.score<=-8?'SHORT':'NEUTRAL'};
+    const nnConf=Math.abs(nnResult.prob-0.5)*2; // 0→1
+    const liveAcc=(nnResult.recentAcc!=null?nnResult.recentAcc:nnResult.accuracy)||50;
+    // NN weight: scales 0→40% based on confidence × how much better than random it is
+    const nnWeight=Math.min(0.40,Math.max(0.05,nnConf*0.5+Math.max(0,(liveAcc-50)/100)));
+    const indWeight=1-nnWeight;
+    // NN score on same -100…+100 scale as Master Bias
+    const nnScore=(nnResult.prob-0.5)*200;
+    const blended=Math.round(masterBias.score*indWeight+nnScore*nnWeight);
+    const rawSignal=masterBias.score>=8?'LONG':masterBias.score<=-8?'SHORT':'NEUTRAL';
+    const aiSignal=blended>=8?'LONG':blended<=-8?'SHORT':'NEUTRAL';
+    const aiOverride=aiSignal!==rawSignal;  // NN changed the call
+    const aiAgrees=nnResult.signal==='NEUTRAL'?false:nnResult.signal===rawSignal;
+    const newLabel=blended>=25?'Strong Bull':blended>=8?'Bullish':blended<=-25?'Strong Bear':blended<=-8?'Bearish':'Neutral';
+    const newColor=blended>=8?'#26a69a':blended<=-8?'#ef5350':'#787b86';
+    const newMlConf=Math.round(masterBias.mlConf*indWeight+nnConf*100*nnWeight);
+    return{
+      ...masterBias,
+      rawScore:masterBias.score,         // original indicator score
+      score:blended,                     // AI-blended score
+      label:newLabel,
+      color:newColor,
+      mlConf:newMlConf,
+      aiSignal,                          // final AI-adjusted call
+      aiOverride,                        // true = NN flipped the signal
+      aiAgrees,                          // true = NN confirms indicators
+      aiWeight:Math.round(nnWeight*100), // % influence from NN
+      nnScore:Math.round(nnScore),       // NN-only score for display
+    };
+  },[masterBias,nnResult]);
+
   return(
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'#131722'}}>
       {/* HEADER */}
@@ -2413,42 +2450,82 @@ const App=()=>{
             </div>
           ):(
             <>
+              {/* Trade Signal — AI-adjusted when NN is trained */}
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 8px 10px'}}>
-                <div><p style={{fontSize:11,color:'#787b86'}}>Trade Signal</p><p style={{fontSize:13,fontWeight:700,color:'#d1d4dc',marginTop:2}}>{symbol} · {tf}</p></div>
-                <span className={setup.signal==='LONG'?'pulse-bull':'pulse-bear'} style={{padding:'4px 14px',borderRadius:20,fontSize:12,fontWeight:700,background:setup.signal==='LONG'?'#26a69a22':'#ef535022',color:setup.signal==='LONG'?'#26a69a':'#ef5350',border:`1px solid ${setup.signal==='LONG'?'#26a69a55':'#ef535055'}`}}>{setup.signal}</span>
+                <div>
+                  <p style={{fontSize:11,color:'#787b86'}}>Trade Signal{aiAdjustedBias?.aiWeight>0?<span style={{marginLeft:5,fontSize:9,color:'#ab47bc',background:'#ab47bc18',padding:'1px 5px',borderRadius:8,border:'1px solid #ab47bc33'}}>🧠 AI Supervised</span>:null}</p>
+                  <p style={{fontSize:13,fontWeight:700,color:'#d1d4dc',marginTop:2}}>{symbol} · {tf}</p>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:3}}>
+                  {(() => {
+                    const sig=aiAdjustedBias?.aiSignal||setup.signal;
+                    const col=sig==='LONG'?'#26a69a':sig==='SHORT'?'#ef5350':'#787b86';
+                    return <span className={sig==='LONG'?'pulse-bull':'pulse-bear'} style={{padding:'4px 14px',borderRadius:20,fontSize:12,fontWeight:700,background:col+'22',color:col,border:`1px solid ${col}55`}}>{sig}</span>;
+                  })()}
+                  {aiAdjustedBias?.aiOverride&&<span style={{fontSize:8,color:'#ab47bc',background:'#ab47bc18',padding:'1px 6px',borderRadius:8,border:'1px solid #ab47bc44'}}>⚠️ NN flipped signal</span>}
+                  {aiAdjustedBias?.aiAgrees&&!aiAdjustedBias?.aiOverride&&<span style={{fontSize:8,color:'#26a69a',background:'#26a69a12',padding:'1px 6px',borderRadius:8}}>✓ NN confirms</span>}
+                </div>
               </div>
 
-              {masterBias&&(
-                <div style={{margin:'0 0 8px',padding:'10px 12px',background:'#131722',borderRadius:8,border:`2px solid ${masterBias.color}44`}}>
+              {aiAdjustedBias&&(
+                <div style={{margin:'0 0 8px',padding:'10px 12px',background:'#131722',borderRadius:8,border:`2px solid ${aiAdjustedBias.color}44`}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
-                    <span style={{fontSize:11,color:'#787b86',fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px',display:'flex',alignItems:'center'}}>Master Bias Score <Info text="Weighted combination of all 8 analysis modules into one score from -100 to +100. Above +60 = Strong Bullish. +30 to +60 = Bullish. -30 to +30 = Neutral (no trade). -30 to -60 = Bearish. Below -60 = Strong Bearish. Only trade when score is outside the neutral zone AND ML Confidence is above 50%."/></span>
-                    <span style={{fontSize:11,fontWeight:700,color:masterBias.color,background:masterBias.color+'18',padding:'2px 10px',borderRadius:10,border:`1px solid ${masterBias.color}44`}}>{masterBias.label}</span>
+                    <span style={{fontSize:11,color:'#787b86',fontWeight:600,textTransform:'uppercase',letterSpacing:'.5px',display:'flex',alignItems:'center'}}>Master Bias Score <Info text="AI-Supervised Master Bias: weighted combination of all 8 analysis engines blended with the Deep Learning Supervisor's prediction. NN influence grows with its validated accuracy — starts at 5% and scales up to 40% as the model learns. When the NN strongly disagrees with the indicators, it pulls the final score (and signal) toward its prediction. Raw indicator score is shown smaller beneath."/></span>
+                    <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:2}}>
+                      <span style={{fontSize:11,fontWeight:700,color:aiAdjustedBias.color,background:aiAdjustedBias.color+'18',padding:'2px 10px',borderRadius:10,border:`1px solid ${aiAdjustedBias.color}44`}}>{aiAdjustedBias.label}</span>
+                      {aiAdjustedBias.aiWeight>0&&<span style={{fontSize:8,color:'#ab47bc'}}>🧠 {aiAdjustedBias.aiWeight}% NN influence</span>}
+                    </div>
                   </div>
-                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
-                    <span style={{fontSize:22,fontWeight:800,color:masterBias.color,fontFamily:'monospace',minWidth:52}}>{masterBias.score>0?'+':''}{masterBias.score}</span>
+                  {/* Score bar — AI blended */}
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+                    <div style={{textAlign:'center',minWidth:52}}>
+                      <div style={{fontSize:22,fontWeight:800,color:aiAdjustedBias.color,fontFamily:'monospace'}}>{aiAdjustedBias.score>0?'+':''}{aiAdjustedBias.score}</div>
+                      <div style={{fontSize:8,color:'#787b86'}}>AI score</div>
+                    </div>
                     <div style={{flex:1}}>
                       <div style={{height:8,background:'#2a2e39',borderRadius:4,overflow:'hidden',position:'relative'}}>
                         <div style={{position:'absolute',left:'50%',top:0,width:2,height:'100%',background:'#2a2e39',zIndex:1}}/>
-                        <div style={{position:'absolute',left:masterBias.score>=0?'50%':'calc(50% + '+masterBias.score/2+'%)',width:Math.abs(masterBias.score)/2+'%',height:'100%',background:masterBias.color,borderRadius:4}}/>
+                        <div style={{position:'absolute',left:aiAdjustedBias.score>=0?'50%':'calc(50% + '+aiAdjustedBias.score/2+'%)',width:Math.abs(aiAdjustedBias.score)/2+'%',height:'100%',background:aiAdjustedBias.color,borderRadius:4,transition:'all .4s'}}/>
                       </div>
                       <div style={{display:'flex',justifyContent:'space-between',fontSize:9,color:'#787b86',marginTop:2}}>
-                        <span>-100 Strong Bear</span><span>0 Neutral</span><span>+100 Strong Bull</span>
+                        <span>-100 Bear</span><span>0 Neutral</span><span>+100 Bull</span>
                       </div>
                     </div>
                   </div>
-                  <div style={{display:'flex',alignItems:'center',gap:8}}>
-                    <span style={{fontSize:10,color:'#787b86',display:'flex',alignItems:'center'}}>ML Confidence <Info text="Measures how strongly all signals agree with each other. Above 75% = high signal alignment, flagged as high-probability setup. 50–74% = moderate agreement, trade with normal caution. Below 50% = signals conflicting, reduce position size or wait for clearer setup. Calculated by re-weighting all feature scores using ML-style importance weights."/></span>
-                    <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden'}}>
-                      <div style={{width:masterBias.mlConf+'%',height:'100%',background:masterBias.mlConf>75?'#26a69a':masterBias.mlConf>50?'#ff9800':'#ef5350',borderRadius:2}}/>
+                  {/* Raw vs NN score breakdown */}
+                  {aiAdjustedBias.aiWeight>0&&(
+                    <div style={{display:'flex',gap:6,marginBottom:6,fontSize:9,color:'#787b86'}}>
+                      <div style={{flex:1,padding:'3px 6px',background:'#2a2e39',borderRadius:4,display:'flex',justifyContent:'space-between'}}>
+                        <span>📊 Indicators</span>
+                        <b style={{color:aiAdjustedBias.rawScore>=0?'#26a69a':'#ef5350'}}>{aiAdjustedBias.rawScore>0?'+':''}{aiAdjustedBias.rawScore}</b>
+                      </div>
+                      <div style={{flex:1,padding:'3px 6px',background:'#2a2e39',borderRadius:4,display:'flex',justifyContent:'space-between'}}>
+                        <span>🧠 NN</span>
+                        <b style={{color:aiAdjustedBias.nnScore>=0?'#26a69a':'#ef5350'}}>{aiAdjustedBias.nnScore>0?'+':''}{aiAdjustedBias.nnScore}</b>
+                      </div>
                     </div>
-                    <span style={{fontSize:10,fontWeight:700,color:masterBias.mlConf>75?'#26a69a':masterBias.mlConf>50?'#ff9800':'#ef5350'}}>{masterBias.mlConf}%</span>
+                  )}
+                  {/* AI override alert */}
+                  {aiAdjustedBias.aiOverride&&(
+                    <div style={{marginBottom:6,padding:'4px 8px',background:'#ab47bc18',borderRadius:4,border:'1px solid #ab47bc44',fontSize:9,color:'#ab47bc'}}>
+                      ⚠️ <b>AI Override:</b> NN learned the indicators are wrong here — signal flipped from <b>{aiAdjustedBias.rawScore>=8?'LONG':aiAdjustedBias.rawScore<=-8?'SHORT':'NEUTRAL'}</b> → <b>{aiAdjustedBias.aiSignal}</b>. Model will self-correct if it turns out to be wrong.
+                    </div>
+                  )}
+                  {aiAdjustedBias.aiAgrees&&!aiAdjustedBias.aiOverride&&<p style={{fontSize:9,color:'#26a69a',marginBottom:4}}>✓ NN confirms indicators — high-conviction setup.</p>}
+                  {/* ML Confidence */}
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontSize:10,color:'#787b86',display:'flex',alignItems:'center'}}>Confidence <Info text="AI-blended confidence: combines indicator signal alignment (ML weight) with NN probability confidence. Green = high alignment, orange = moderate, red = signals conflicting. Above 75% = best setups only."/></span>
+                    <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden'}}>
+                      <div style={{width:aiAdjustedBias.mlConf+'%',height:'100%',background:aiAdjustedBias.mlConf>75?'#26a69a':aiAdjustedBias.mlConf>50?'#ff9800':'#ef5350',borderRadius:2}}/>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:700,color:aiAdjustedBias.mlConf>75?'#26a69a':aiAdjustedBias.mlConf>50?'#ff9800':'#ef5350'}}>{aiAdjustedBias.mlConf}%</span>
                   </div>
-                  {masterBias.mlConf>=75&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ High-probability setup</p>}
+                  {aiAdjustedBias.mlConf>=75&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ High-probability setup</p>}
                 </div>
               )}
 
               {/* ── DEEP LEARNING SUPERVISOR PANEL ── */}
-              <div style={{margin:'0 0 8px',padding:'10px 12px',background:'linear-gradient(145deg,#0d1117,#12172a)',borderRadius:8,border:`1px solid ${nnResult?nnResult.signal==='LONG'?'#26a69a66':nnResult.signal==='SHORT'?'#ef535066':'#2a2e39':'#2a2e39'}`}}>
+              <div style={{margin:'0 0 8px',padding:'10px 12px',background:'linear-gradient(145deg,#0d1117,#12172a)',borderRadius:8,border:`1px solid ${aiAdjustedBias?.aiSignal==='LONG'?'#26a69a66':aiAdjustedBias?.aiSignal==='SHORT'?'#ef535066':'#2a2e39'}`}}>
                 <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
                   <span style={{fontSize:11,color:'#ab47bc',fontWeight:700,textTransform:'uppercase',letterSpacing:'.5px'}}>🧠 Deep Learning Supervisor <Info text="Multi-head deep neural network with 8-candle sequence window. Learns from EVERY analysis engine (TA, SMC, Wyckoff, VP, momentum, microstructure, OI, sentiment, news). Self-corrects on its own mistakes with 3x weight. Logs news→price reactions for pattern memory. Persists to A:\crypto_prediction_model across sessions."/></span>
                   <div style={{display:'flex',gap:4,alignItems:'center'}}>
@@ -2768,6 +2845,8 @@ const App=()=>{
                   <tr><td>Asset</td><td>{symbol}</td></tr>
                   <tr><td>HTF Bias</td><td style={{color:setup.htf_bias==='Bullish'?'#26a69a':setup.htf_bias==='Bearish'?'#ef5350':'#d1d4dc'}}>{setup.htf_bias}</td></tr>
                   <tr><td>Phase</td><td>{setup.phase}</td></tr>
+                  <tr><td>AI Signal</td><td style={{color:aiAdjustedBias?.aiSignal==='LONG'?'#26a69a':aiAdjustedBias?.aiSignal==='SHORT'?'#ef5350':'#787b86',fontWeight:700}}>{aiAdjustedBias?.aiSignal||setup.signal}{aiAdjustedBias?.aiOverride?' 🧠':''}</td></tr>
+                  <tr><td>Bias Score</td><td><span style={{color:aiAdjustedBias?.color||'#d1d4dc'}}>{aiAdjustedBias?.score>0?'+':''}{aiAdjustedBias?.score??'—'}</span>{aiAdjustedBias?.aiWeight>0&&<span style={{fontSize:9,color:'#787b86',marginLeft:4}}>(raw {aiAdjustedBias.rawScore>0?'+':''}{aiAdjustedBias.rawScore})</span>}</td></tr>
                   <tr><td>{tf} Candle</td><td>{setup.next_type} — <span style={{color:setup.next_dir==='Bullish'?'#26a69a':'#ef5350'}}>{setup.next_dir}</span></td></tr>
                   <tr><td>Confidence</td><td>{setup.confidence}</td></tr>
                   <tr><td>Entry</td><td>{fmt(setup.entry_zone?.[0],dec)} – {fmt(setup.entry_zone?.[1],dec)}</td></tr>
