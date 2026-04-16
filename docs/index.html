@@ -436,6 +436,9 @@ const NN_LAYERS=[96,64,32,3]; // 3 outputs: [bullish_prob, magnitude, volatility
 
 let _nnInst=null;
 let _nnStats={totalCandles:0,accuracy:50,sessions:0,lastTrained:null,correctPredictions:0,totalValidated:0,corrections:0,newsLogged:0,recentCorrect:0,recentTotal:0,immediateRetrains:0};
+// Dirty tracking — only write to disk when model state actually changed
+let _fsDirtySessionStamp=null; // last sessions count written to disk
+let _fsDirtyCorStamp=null;     // last corrections count written
 
 function _getNN(){
   if(_nnInst) return _nnInst;
@@ -660,6 +663,10 @@ function validatePendingPredictions(candles,symbol,tf){
 // NEWS REACTION LOGGING: when news arrives, log feature snapshot + price reaction
 function logNewsReaction(newsItem,candles,symbol){
   if(!newsItem||!candles||candles.length<SEQ_LEN+25) return;
+  // Only learn from HIGH-IMPACT news — medium/low news doesn't reliably move price
+  if(!newsItem.impact||newsItem.impact!=='high') return;
+  // Only learn non-neutral sentiment (neutral news carries no directional signal)
+  if(!newsItem.sentiment||newsItem.sentiment==='neutral') return;
   try{
     const newsTs=new Date(newsItem.timestamp||Date.now()).getTime();
     // Find the candle closest to the news timestamp
@@ -802,11 +809,16 @@ async function _fsSyncFromDisk(){
 }
 
 // Save model + stats + prediction outcomes + news memory
-async function fsSaveModel(){
+// Only writes when model state changed since last save (avoids redundant writes)
+async function fsSaveModel(force=false){
+  if(!_fsDirHandle) return;
+  const sessChanged=_nnStats.sessions!==_fsDirtySessionStamp;
+  const corChanged=_nnStats.corrections!==_fsDirtyCorStamp;
+  if(!force&&!sessChanged&&!corChanged) return; // nothing new to persist
   const net=_getNN();
   await _fsWrite('model_weights.json',net.toJSON());
   await _fsWrite('training_stats.json',_nnStats);
-  // Also mirror outcomes + news memory to disk
+  // Mirror outcomes + news memory to disk
   try{
     const outcomes=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
     await _fsWrite('prediction_outcomes.json',outcomes);
@@ -815,6 +827,9 @@ async function fsSaveModel(){
     const news=JSON.parse(localStorage.getItem(_NN_NEWS_KEY)||'[]');
     await _fsWrite('news_reactions.json',news);
   }catch(_2){}
+  // Update stamps so we don't re-write same data
+  _fsDirtySessionStamp=_nnStats.sessions;
+  _fsDirtyCorStamp=_nnStats.corrections;
 }
 async function fsLogPrediction(symbol,tf,pred){
   if(!_fsDirHandle||!pred) return;
@@ -878,68 +893,140 @@ async function fetchIntermarketData(cryptoAsset){
 function futureCandlesSim(candles,signal,atr,count,ctx){
   // ctx = {momScore, microScore, vpData, macd, squeeze, rsiVal, bbData, cmf, stoch}
   const p0=candles[candles.length-1].close;
-  const mom=ctx?.momScore||0;
-  const micro=ctx?.microScore||0;
-  const macd=ctx?.macd||{};
   const vp=ctx?.vpData||null;
-  const squeeze=ctx?.squeeze||false;
   const rsi=ctx?.rsiVal||50;
   const bb=ctx?.bbData||null;
+  const macd=ctx?.macd||{};
+  const squeeze=ctx?.squeeze||false;
 
-  // Direction is ALWAYS the signal direction — indicators only modulate strength
-  const dir=signal==='LONG'?1:-1;
+  // ── NN inference (no new logging — prediction already logged by runNNPredict) ──
+  let nnProb=null,nnMag=0.40,nnVol=0.35;
+  if(_nnStats.totalCandles>=100){
+    try{
+      const inp=_buildSequenceInput(candles,candles.length-1);
+      if(inp){const out=_getNN().predict(inp);nnProb=out[0];nnMag=Math.max(0.05,out[1]);nnVol=Math.max(0.05,out[2]);}
+    }catch(_2){}
+  }
 
-  // Strength multiplier from indicators (0.4 to 1.6 range — never reverses direction)
-  const momBoost=Math.max(-0.3,Math.min(0.3,mom/100)); // -0.3 to +0.3
-  const microBoost=Math.max(-0.15,Math.min(0.15,micro/100));
-  const macdBoost=macd.hist>0?(macd.expansion?0.15:0.05):(macd.expansion?-0.15:-0.05);
-  const squeezeBoost=squeeze?0.2:0;
-  // Sum: base 1.0 + boosts = 0.4 to 1.6 (always positive = never reverses)
-  const strength=Math.max(0.4,Math.min(1.6,1.0+momBoost+microBoost+macdBoost+squeezeBoost));
+  // Confidence & final direction
+  const nnConf=nnProb!==null?Math.abs(nnProb-0.5)*2:0.25;
+  const fallbackDir=signal==='LONG'?1:-1;
+  const primaryDir=nnProb!==null&&_nnStats.totalCandles>=150
+    ?(nnProb>=0.54?1:nnProb<=0.46?-1:fallbackDir):fallbackDir;
 
-  // RSI dampening at extremes (reduces magnitude, doesn't reverse)
-  const rsiDamp=rsi>75?0.6:rsi<25?0.6:rsi>65?0.8:rsi<35?0.8:1.0;
+  // RSI dampening (extreme RSI = exhaustion, reduce body sizes)
+  const rsiDamp=rsi>78?0.50:rsi<22?0.50:rsi>68?0.75:rsi<32?0.75:1.0;
 
-  // Recent candle pattern for realistic wicks
-  const last10=candles.slice(-10);
-  const avgBody=last10.reduce((s,c)=>s+Math.abs(c.close-c.open),0)/10;
-  const avgRange=last10.reduce((s,c)=>s+c.high-c.low,0)/10||atr;
-  const bodyRatio=avgBody/(avgRange||1);
+  // Scaled sizes from NN — first candle gets full NN magnitude
+  const baseBody=nnMag*2*atr;   // NN-calibrated body (1.0 = 2 ATRs)
+  const baseRange=nnVol*3*atr;  // NN-calibrated range (1.0 = 3 ATRs)
 
-  let p=p0;
+  // ── STRUCTURE SEQUENCE ──
+  // highConf (>35% away from 50%): impulse waves with pullbacks
+  // medConf  (>15%): impulse → inside consolidation → breakout
+  // lowConf  (<15%): ranging inside bars (market indecisive)
+  const seq=[];
+  if(nnConf>0.35){
+    // Wave: 3 impulse-type, 1 pullback, repeat
+    for(let i=0;i<count;i++){
+      if(i===0) seq.push('impulse');
+      else if(i%4===3) seq.push('pullback');
+      else seq.push('continuation');
+    }
+  } else if(nnConf>0.15){
+    for(let i=0;i<count;i++){
+      if(i===0) seq.push('impulse');
+      else if(i<=2) seq.push('inside');
+      else if(i===3) seq.push('breakout');
+      else if(i%3===0) seq.push('impulse');
+      else if(i%3===1) seq.push('pullback');
+      else seq.push('inside');
+    }
+  } else {
+    // Ranging / uncertain
+    for(let i=0;i<count;i++){
+      seq.push(i%2===0?'range':'inside');
+    }
+  }
+
+  // Pinbar injection near VP / BB levels
+  if(vp||bb){
+    let proj=p0;
+    const keyLevels=[vp?.poc,vp?.vah,vp?.val,bb?.upper,bb?.lower].filter(Boolean);
+    for(let i=0;i<seq.length;i++){
+      proj+=primaryDir*baseBody*(seq[i]==='pullback'?-0.38:seq[i]==='inside'?0.05:0.55)*Math.max(0.25,1-i*0.04);
+      const near=keyLevels.some(l=>Math.abs(proj-l)/atr<0.9);
+      if(near&&(seq[i]==='impulse'||seq[i]==='continuation')) seq[i]='pinbar';
+    }
+  }
+
+  // ── BUILD OHLC ──
+  let price=p0;
   const result=[];
   for(let i=0;i<count;i++){
-    // Decay strength over time (uncertainty grows)
-    const decay=Math.max(0.3,1-i*0.05);
-    // Base move: always in signal direction, magnitude from indicators
-    let move=dir*atr*0.38*strength*decay*rsiDamp;
-
-    // VP levels as soft attractors/barriers — only when price is near POC (within 3 ATR)
-    if(vp){
-      const distPoc=(vp.poc-p)/atr;
-      if(Math.abs(distPoc)<3) move+=distPoc*0.03*atr*decay; // gentle pull toward POC only when close
-      // VAH resistance: only apply if price was BELOW VAH at prediction start (breakout not yet done)
-      if(dir>0&&p0<=vp.vah&&p>vp.vah&&Math.abs((vp.vah-p)/atr)<2) move*=0.9;
-      // VAL support: only apply if price was ABOVE VAL at prediction start (breakdown not yet done)
-      if(dir<0&&p0>=vp.val&&p<vp.val&&Math.abs((vp.val-p)/atr)<2) move*=0.9;
-    }
-
-    // BB: slight dampening if beyond bands
+    const type=seq[i]||'range';
+    const decay=Math.max(0.22,1-i*0.045);
+    let bbFactor=1;
     if(bb){
-      if(p>bb.upper) move*=0.85;
-      if(p<bb.lower) move*=0.85;
+      if(price>bb.upper&&primaryDir>0) bbFactor=0.35;
+      if(price<bb.lower&&primaryDir<0) bbFactor=0.35;
     }
 
-    // Controlled variation (deterministic, adds natural candle rhythm)
-    const wave=1+Math.sin(i*1.7+0.5)*0.18;
-    move*=wave;
+    let bodySize,wickH,wickL,candleDir;
+    const bd=baseBody*decay*rsiDamp;
+    const rg=baseRange*decay;
+    switch(type){
+      case 'impulse':
+        candleDir=primaryDir;
+        bodySize=bd*bbFactor*(0.55+0.45*nnConf);
+        wickH=rg*0.15*(primaryDir>0?0.25:0.75);
+        wickL=rg*0.15*(primaryDir>0?0.75:0.25);
+        break;
+      case 'continuation':
+        candleDir=primaryDir;
+        bodySize=bd*0.55*bbFactor;
+        wickH=rg*0.12*(primaryDir>0?0.20:0.60);
+        wickL=rg*0.12*(primaryDir>0?0.60:0.20);
+        break;
+      case 'pullback':
+        candleDir=-primaryDir;
+        bodySize=bd*0.38; // Fibonacci 38.2% retracement
+        wickH=rg*0.10;
+        wickL=rg*0.10;
+        break;
+      case 'inside':
+        candleDir=primaryDir;
+        bodySize=bd*0.18;
+        wickH=rg*0.18;
+        wickL=rg*0.18;
+        break;
+      case 'breakout':
+        candleDir=primaryDir;
+        bodySize=bd*0.88*bbFactor;
+        wickH=rg*0.08*(primaryDir>0?0.10:0.50);
+        wickL=rg*0.08*(primaryDir>0?0.50:0.10);
+        break;
+      case 'pinbar':
+        candleDir=-primaryDir*0.08; // tiny body, big rejection wick
+        bodySize=bd*0.07;
+        wickH=primaryDir>0?rg*0.72:rg*0.10;
+        wickL=primaryDir>0?rg*0.10:rg*0.72;
+        break;
+      case 'range':
+      default:
+        candleDir=(i%2===0?1:-1);
+        bodySize=bd*0.22;
+        wickH=rg*0.22;
+        wickL=rg*0.22;
+        break;
+    }
 
-    const o=p,c=p+move;
-    const wickScale=atr*(1-bodyRatio)*0.35*decay;
-    const wickUp=wickScale*(0.4+0.4*Math.abs(Math.sin(i*1.3)));
-    const wickDn=wickScale*(0.4+0.4*Math.abs(Math.cos(i*1.7)));
-    result.push({open:o,high:Math.max(o,c)+wickUp,low:Math.min(o,c)-wickDn,close:c});
-    p=c;
+    const o=price;
+    const c=o+candleDir*Math.max(atr*0.0005,bodySize);
+    const h=Math.max(o,c)+Math.max(0,wickH);
+    const l=Math.min(o,c)-Math.max(0,wickL);
+    result.push({open:o,high:h,low:l,close:c,patternType:type});
+    price=c;
   }
   return result;
 }
@@ -1933,7 +2020,16 @@ const App=()=>{
     const delta=TF_SECS[tf]||3600;
     const last=hist[hist.length-1]?.time||0;
     const maxF=futureCount!==''&&!isNaN(+futureCount)?Math.max(0,+futureCount):undefined;
-    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>({time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,color:'rgba(255,200,0,.75)',borderColor:'#FFC800',wickColor:'#FFC800'})).filter(c=>c.open&&c.close);
+    const _ghostCol=t=>{
+      if(t==='pullback')   return{color:'rgba(255,152,0,.75)',borderColor:'#FF9800',wickColor:'#FF9800'};
+      if(t==='inside')     return{color:'rgba(120,123,134,.70)',borderColor:'#787b86',wickColor:'#787b86'};
+      if(t==='breakout')   return{color:'rgba(41,98,255,.85)',borderColor:'#2962ff',wickColor:'#2962ff'};
+      if(t==='pinbar')     return{color:'rgba(171,71,188,.80)',borderColor:'#AB47BC',wickColor:'#AB47BC'};
+      if(t==='range')      return{color:'rgba(180,180,80,.60)',borderColor:'#b4b450',wickColor:'#b4b450'};
+      // impulse / continuation
+      return{color:'rgba(255,200,0,.85)',borderColor:'#FFC800',wickColor:'#FFC800'};
+    };
+    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>{const col=_ghostCol(c.patternType);return{time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,...col};}).filter(c=>c.open&&c.close);
     const merged=[...hist,...fut].sort((a,b)=>a.time-b.time);
     cSeries.current.setData(merged);
     chartInst.current.timeScale().scrollToRealTime();
@@ -1948,7 +2044,17 @@ const App=()=>{
       const t=Math.floor(candles[b.idx]?.timestamp/1000)||0;
       if(t) markers.push({time:t,position:b.type==='bull'?'belowBar':'aboveBar',color:b.type==='bull'?'#26a69a':'#ef5350',shape:'arrowUp',text:b.type==='bull'?'BOS↑':'BOS↓'});
     });
-    if(fut.length) markers.push({time:fut[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'Predicted'});
+    if(fut.length){
+      markers.push({time:fut[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'🔮 Predicted'});
+      // Structure labels on ghost candles (skip impulse/continuation — already coloured)
+      const _structLabel={pullback:'↩Retrace',inside:'◇Inside',breakout:'⚡Break',pinbar:'📍PinBar',range:'↔Range'};
+      fut.forEach((fc,i)=>{
+        const pat=setup?.future_candles?.[i]?.patternType;
+        if(pat&&_structLabel[pat]){
+          markers.push({time:fc.time,position:fc.close>=fc.open?'belowBar':'aboveBar',color:_ghostCol(pat).borderColor,shape:'circle',text:_structLabel[pat]});
+        }
+      });
+    }
     (nd?.news||[]).forEach(n=>{
       if(!n.timestamp)return;
       const nt=Math.floor(new Date(n.timestamp).getTime()/1000);
@@ -1997,7 +2103,7 @@ const App=()=>{
   // FS auto-connect on mount (re-uses permission from previous session)
   useEffect(()=>{
     fsAutoConnect().then(async ok=>{
-      if(ok){setFsConnected(true);await fsSaveModel();}
+      if(ok){setFsConnected(true);await fsSaveModel(true);}
     });
   },[]);
 
@@ -2349,7 +2455,7 @@ const App=()=>{
                     {nnTraining&&<span style={{fontSize:9,color:'#ff9800'}}>⚡ Learning…</span>}
                     {fsConnected
                       ?<span style={{fontSize:9,color:'#26a69a',background:'#26a69a18',padding:'2px 6px',borderRadius:4,border:'1px solid #26a69a33'}} title="Model persisted to A:\\crypto_prediction_model">💾 Saved</span>
-                      :<button onClick={async()=>{const ok=await fsPickFolder();setFsConnected(ok);if(ok){await fsSaveModel();try{const c=candles;const s=symbol;const t=tf;if(c&&c.length>0){await fsSaveTrainingBatch(s,t,c.length,_nnStats.accuracy);}}catch(_2){}}}} style={{fontSize:9,color:'#2962ff',background:'#2962ff15',padding:'2px 8px',borderRadius:4,border:'1px solid #2962ff44',cursor:'pointer'}}>📁 Connect A:\crypto_prediction_model</button>
+                      :<button onClick={async()=>{const ok=await fsPickFolder();setFsConnected(ok);if(ok){await fsSaveModel(true);try{const c=candles;const s=symbol;const t=tf;if(c&&c.length>0){await fsSaveTrainingBatch(s,t,c.length,_nnStats.accuracy);}}catch(_2){}}}} style={{fontSize:9,color:'#2962ff',background:'#2962ff15',padding:'2px 8px',borderRadius:4,border:'1px solid #2962ff44',cursor:'pointer'}}>📁 Connect A:\crypto_prediction_model</button>
                     }
                   </div>
                 </div>
