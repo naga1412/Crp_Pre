@@ -937,31 +937,25 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   const baseRange=Math.max(avgRange*0.60, nnVol*3*atr);
 
   // ── STRUCTURE SEQUENCE ──
-  // highConf (>35% away from 50%): impulse waves with pullbacks
-  // medConf  (>15%): impulse → inside consolidation → breakout
-  // lowConf  (<15%): ranging inside bars (market indecisive)
+  // ── STRUCTURE SEQUENCE — supports up to 50 candles with full pattern cycles ──
+  // highConf: Elliott-style 5-wave impulse with 3-wave corrections (repeating)
+  // medConf:  impulse → consolidation → breakout cycles
+  // lowConf:  ranging / H&S-like topping/bottoming structures
   const seq=[];
   if(nnConf>0.35){
-    // Wave: 3 impulse-type, 1 pullback, repeat
-    for(let i=0;i<count;i++){
-      if(i===0) seq.push('impulse');
-      else if(i%4===3) seq.push('pullback');
-      else seq.push('continuation');
-    }
+    // Elliott 5-wave pattern repeating: i-ii-iii-iv-v then corrective a-b-c
+    // wave:  imp cont cont pb  cont | pb   imp  cont pb  cont | pb  imp ...
+    const wave8=['impulse','continuation','continuation','pullback','continuation','pullback','inside','breakout'];
+    for(let i=0;i<count;i++) seq.push(wave8[i%wave8.length]);
   } else if(nnConf>0.15){
-    for(let i=0;i<count;i++){
-      if(i===0) seq.push('impulse');
-      else if(i<=2) seq.push('inside');
-      else if(i===3) seq.push('breakout');
-      else if(i%3===0) seq.push('impulse');
-      else if(i%3===1) seq.push('pullback');
-      else seq.push('inside');
-    }
+    // Consolidation breakout cycles: impulse → 3 inside → breakout → pullback → repeat
+    const wave6=['impulse','inside','inside','inside','breakout','pullback'];
+    for(let i=0;i<count;i++) seq.push(wave6[i%wave6.length]);
   } else {
-    // Ranging / uncertain
-    for(let i=0;i<count;i++){
-      seq.push(i%2===0?'range':'inside');
-    }
+    // Low confidence — ranging structure that can form H&S, double top/bottom
+    // Pattern: push up → retrace → push same high → retrace deeper → breakdown
+    const hsPat=['continuation','pullback','inside','continuation','pullback','inside','continuation','pullback','range','inside','pullback','range'];
+    for(let i=0;i<count;i++) seq.push(hsPat[i%hsPat.length]);
   }
 
   // Pinbar injection near VP / BB levels
@@ -969,7 +963,7 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
     let proj=p0;
     const keyLevels=[vp?.poc,vp?.vah,vp?.val,bb?.upper,bb?.lower].filter(Boolean);
     for(let i=0;i<seq.length;i++){
-      proj+=primaryDir*baseBody*(seq[i]==='pullback'?-0.38:seq[i]==='inside'?0.05:0.55)*Math.max(0.25,1-i*0.04);
+      proj+=primaryDir*baseBody*(seq[i]==='pullback'?-0.38:seq[i]==='inside'?0.05:0.55)*Math.max(0.15,1-i*0.02);
       const near=keyLevels.some(l=>Math.abs(proj-l)/atr<0.9);
       if(near&&(seq[i]==='impulse'||seq[i]==='continuation')) seq[i]='pinbar';
     }
@@ -980,7 +974,9 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   const result=[];
   for(let i=0;i<count;i++){
     const type=seq[i]||'range';
-    const decay=Math.max(0.22,1-i*0.045);
+    // Decay: gentle slope so candle 50 is still ~40% of candle 1 (not flat)
+    // Formula: starts at 1.0, floors at 0.40 around candle 30, stays there
+    const decay=Math.max(0.40,1-i*0.018);
     let bbFactor=1;
     if(bb){
       if(price>bb.upper&&primaryDir>0) bbFactor=0.35;
@@ -1096,7 +1092,7 @@ function generateSetup(candles,price){
     next_type:candleType(lc),
     next_size:lATR/price>0.02?'Large':lATR/price>0.008?'Medium':'Small',
     confidence:bullPct>68||bullPct<32?'High':bullPct>57||bullPct<43?'Medium':'Low',
-    future_candles:futureCandlesSim(candles,signal,lATR,12,predCtx),
+    future_candles:futureCandlesSim(candles,signal,lATR,50,predCtx),
     vp_poc:vp?.poc||null,vp_vah:vp?.vah||null,vp_val:vp?.val||null,
     vp_hvn:vp?.hvn||[],vp_lvn:vp?.lvn||[],vp,
   };
@@ -2356,7 +2352,7 @@ const App=()=>{
     const hist=candles.map(c=>({time:Math.floor(c.timestamp/1000),open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter(c=>c.open&&c.close);
     const delta=TF_SECS[tf]||3600;
     const last=hist[hist.length-1]?.time||0;
-    const maxF=futureCount!==''&&!isNaN(+futureCount)?Math.max(0,+futureCount):undefined;
+    const maxF=futureCount!==''&&!isNaN(+futureCount)?Math.max(0,Math.min(50,+futureCount)):50;
     const _ghostCol=t=>{
       if(t==='pullback')   return{color:'rgba(255,152,0,.75)',borderColor:'#FF9800',wickColor:'#FF9800'};
       if(t==='inside')     return{color:'rgba(120,123,134,.70)',borderColor:'#787b86',wickColor:'#787b86'};
@@ -2841,7 +2837,7 @@ const App=()=>{
           <div style={{flex:1}}/>
           <div style={{display:'flex',alignItems:'center',gap:4,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:'2px 6px',flexShrink:0}}>
             <span style={{fontSize:10,color:'#787b86',whiteSpace:'nowrap'}}>🕯</span>
-            <input type="number" min="0" max="200" value={futureCount} onChange={e=>setFutureCount(e.target.value)} placeholder="auto"
+            <input type="number" min="0" max="50" value={futureCount} onChange={e=>setFutureCount(e.target.value)} placeholder="50"
               style={{width:40,background:'transparent',border:'none',outline:'none',color:'#FFC800',fontSize:11,fontWeight:600,textAlign:'center'}}/>
           </div>
           <div style={{display:'flex',gap:2,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,padding:2,flexShrink:0}}>
