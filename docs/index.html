@@ -1532,24 +1532,64 @@ function AIChatTab({marketContext}){
            /\b(feature|button|indicator|alert|signal|chart|candle|scanner|tab|function|panel|display|color|style|layout|score|weight|threshold|interval|size|font|column|row|section|badge|label|icon|line|bar|overlay|ui|widget|column)\b/.test(lo);
   };
 
+  // Cache which Gemini model+version actually works for this key
+  const _geminiModelRef=useRef(null);
+
+  const _findGeminiModel=async()=>{
+    if(_geminiModelRef.current) return _geminiModelRef.current;
+    // Step 1: ask Google which models this key actually supports
+    try{
+      const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+      if(r.ok){
+        const d=await r.json();
+        const names=(d.models||[]).map(m=>m.name.replace('models/',''));
+        // Prefer flash models (fastest, free), then pro
+        const prefer=['gemini-2.0-flash','gemini-1.5-flash','gemini-2.0-flash-lite','gemini-1.5-flash-latest','gemini-1.5-pro','gemini-1.0-pro'];
+        for(const p of prefer){
+          if(names.some(n=>n===p||n.startsWith(p))){
+            const found={ver:'v1beta',model:p};
+            _geminiModelRef.current=found;
+            return found;
+          }
+        }
+      }
+    }catch(_){}
+    // Step 2: fallback — brute-force known working combos
+    const FALLBACKS=[
+      {ver:'v1beta',model:'gemini-2.0-flash'},
+      {ver:'v1beta',model:'gemini-1.5-flash'},
+      {ver:'v1',model:'gemini-1.5-flash'},
+      {ver:'v1beta',model:'gemini-1.5-pro'},
+      {ver:'v1',model:'gemini-1.5-pro'},
+    ];
+    for(const fb of FALLBACKS){
+      try{
+        const testUrl=`https://generativelanguage.googleapis.com/${fb.ver}/models/${fb.model}:generateContent?key=${apiKey}`;
+        const tr=await fetch(testUrl,{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({contents:[{role:'user',parts:[{text:'hi'}]}],generationConfig:{maxOutputTokens:5}})});
+        if(tr.ok){_geminiModelRef.current=fb;return fb;}
+      }catch(_){}
+    }
+    return null;
+  };
+
   const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
     // ── Google Gemini (FREE — 1500 req/day) ──
-    // Tries v1 endpoint first (more stable), then v1beta, across multiple models
     if(provider==='gemini'){
-      const ATTEMPTS=[
-        {ver:'v1',model:'gemini-1.5-flash'},
-        {ver:'v1',model:'gemini-1.5-pro'},
-        {ver:'v1beta',model:'gemini-1.5-flash-latest'},
-        {ver:'v1beta',model:'gemini-2.0-flash-lite'},
-        {ver:'v1beta',model:'gemini-pro'},
-      ];
+      // Auto-discover which model works for this key
+      const found=await _findGeminiModel();
+      if(!found) throw new Error(
+        'No Gemini models found for this API key.\n\n'+
+        '✅ Fix: Go to aistudio.google.com → Get API Key → Create API key → select "Create new project" → copy new key → paste in Change Key above.'
+      );
+      const{ver,model}=found;
       const hist=historyRef.current.slice(-10).map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.content}]}));
-      // Gemini requires strict user/model alternation — fix any consecutive same-role
       const safeHist=[];
       for(const h of hist){
         if(safeHist.length&&safeHist[safeHist.length-1].role===h.role) continue;
         safeHist.push(h);
       }
+      const url=`https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent?key=${apiKey}`;
       const body={
         contents:[
           {role:'user',parts:[{text:systemPrompt}]},
@@ -1559,19 +1599,10 @@ function AIChatTab({marketContext}){
         ],
         generationConfig:{maxOutputTokens:maxTokens,temperature:0.7}
       };
-      let lastErr='Unknown error';
-      for(const{ver,model}of ATTEMPTS){
-        const url=`https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent?key=${apiKey}`;
-        try{
-          const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-          const d=await r.json().catch(()=>({}));
-          if(!r.ok){lastErr=d?.error?.message||`${r.status} on ${model}`;continue;}
-          const txt=d.candidates?.[0]?.content?.parts?.[0]?.text;
-          if(txt) return txt;
-          lastErr=`Empty response from ${model}`;
-        }catch(e){lastErr=e.message;}
-      }
-      throw new Error(`Gemini error: ${lastErr}\n\nTry: create a NEW API key at aistudio.google.com with a NEW project.`);
+      const r=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(d?.error?.message||`Gemini ${r.status}`);
+      return d.candidates?.[0]?.content?.parts?.[0]?.text||'(no response)';
     }
     // ── OpenAI ──
     if(provider==='openai'){
@@ -1703,7 +1734,7 @@ Rules:
               placeholder={provider==='gemini'?'AIza... (from aistudio.google.com)':provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
               style={{flex:1,minWidth:180,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px',outline:'none'}}
               onKeyDown={e=>{if(e.key==='Enter'){localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}}/>
-            <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}
+            <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);_geminiModelRef.current=null;setShowKey(false);}}
               style={{background:'#26a69a',border:'none',borderRadius:4,color:'#fff',fontSize:11,padding:'5px 14px',cursor:'pointer',fontWeight:600}}>Connect</button>
           </div>
           {provider==='gemini'&&<div style={{background:'#26a69a18',border:'1px solid #26a69a44',borderRadius:5,padding:'6px 10px',marginBottom:6}}>
