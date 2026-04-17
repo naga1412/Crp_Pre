@@ -2743,8 +2743,27 @@ const App=()=>{
       // impulse / continuation
       return{color:'rgba(255,200,0,.85)',borderColor:'#FFC800',wickColor:'#FFC800'};
     };
+    // ── Ghost candle direction: always use Master Bias (aiAdjustedBias) as authoritative signal ──
+    // generateSetup() uses only EMA9/21/50 which can disagree with the full 12-module score.
+    // When they conflict, regenerate future_candles with the correct bias direction.
+    const masterSignal=aiAdjustedBias?.aiSignal; // 'LONG'|'SHORT'|'NEUTRAL'
+    const setupSignal=setup?.signal||'LONG';
+    let rawGhosts=setup?.future_candles||[];
+    if(masterSignal&&masterSignal!=='NEUTRAL'&&masterSignal!==setupSignal&&candles?.length>55&&setup){
+      // Master Bias contradicts generateSetup signal — regenerate with correct direction
+      try{
+        const lATR=parseFloat(setup.atr)||candles.slice(-14).reduce((s,c,i,a)=>i===0?0:s+Math.abs(c.close-(a[i-1]?.close||c.close)),0)/14||candles[candles.length-1].close*0.01;
+        const C2=candles.map(c=>c.close);
+        const _macd2=calcMACD(C2);const _stoch2=calcStochRSI(C2);const _cmf2=calcCMF(candles);
+        const _bb2=calcBB(C2);const _klt2=calcKeltner(candles);
+        const _sq2=_bb2&&_klt2?_bb2.upper<_klt2.upper&&_bb2.lower>_klt2.lower:false;
+        const _mom2=calcMomentumScore(candles);const _mic2=calcMicrostructureScore(candles);
+        const ctx2={momScore:_mom2.score,microScore:_mic2.score,vpData:setup.vp,macd:_macd2,squeeze:_sq2,rsiVal:parseFloat(setup.rsi)||50,bbData:_bb2,cmf:_cmf2,stoch:_stoch2};
+        rawGhosts=futureCandlesSim(candles,masterSignal,lATR,50,ctx2);
+      }catch(_2){rawGhosts=setup?.future_candles||[];}
+    }
     // FIX6: filter out NaN/Infinity ghost candles that would corrupt the chart
-    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>{const col=_ghostCol(c.patternType);return{time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,...col};}).filter(c=>c.open&&c.close&&isFinite(c.open)&&isFinite(c.high)&&isFinite(c.low)&&isFinite(c.close)&&c.high>=c.low);
+    const fut=rawGhosts.slice(0,maxF).map((c,i)=>{const col=_ghostCol(c.patternType);return{time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,...col};}).filter(c=>c.open&&c.close&&isFinite(c.open)&&isFinite(c.high)&&isFinite(c.low)&&isFinite(c.close)&&c.high>=c.low);
     const merged=[...hist,...fut].sort((a,b)=>a.time-b.time);
     cSeries.current.setData(merged);
     chartInst.current.timeScale().scrollToRealTime();
@@ -2776,7 +2795,7 @@ const App=()=>{
     markers.sort((a,b)=>a.time-b.time);
     cSeries.current.setMarkers(markers);
     if(hist.length) setPrevClose(hist[hist.length-1].close);
-  },[candles,setup,nd,futureCount]);
+  },[candles,setup,nd,futureCount,aiAdjustedBias]);
 
   // ── INDICATOR OVERLAY RENDERING ──
   useEffect(()=>{
