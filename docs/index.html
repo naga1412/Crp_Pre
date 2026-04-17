@@ -469,22 +469,24 @@ function calcTAIndicatorScore(candles,price){
   // EMA200 — big-picture trend filter (most important)
   try{const e200=calcEMA(C,Math.min(200,C.length-1));const v200=e200[e200.length-1];if(v200) sc+=price>v200?18:-18;}catch(_){}
   // Parabolic SAR — trend direction
-  try{const sar=calcPSAR(H,L);const lSar=sar[sar.length-1];if(lSar) sc+=price>lSar?12:-12;}catch(_){}
+  // FIX1: calcPSAR returns {sar:[],bull:[]} object — must access .sar array
+  try{const psarObj=calcPSAR(H,L);const sarArr=psarObj?.sar;const lSar=sarArr?sarArr[sarArr.length-1]:null;if(lSar&&isFinite(lSar)) sc+=price>lSar?12:-12;}catch(_){}
   // VWAP — fair value reference (daily)
-  try{const vwap=calcVWAP(candles);const lV=vwap[vwap.length-1];if(lV) sc+=price>lV?10:-10;}catch(_){}
+  try{const vwap=calcVWAP(candles);const lV=vwap[vwap.length-1];if(lV&&isFinite(lV)) sc+=price>lV?10:-10;}catch(_){}
   // Ichimoku Cloud — price position relative to cloud
   try{
     const ichi=calcIchimoku(H,L,C);
     const lA=ichi.senkouA[ichi.senkouA.length-1],lB=ichi.senkouB[ichi.senkouB.length-1];
-    if(lA&&lB){const top=Math.max(lA,lB),bot=Math.min(lA,lB);
-      sc+=price>top?14:price<bot?-14:0; // above cloud / below cloud / inside=0
+    if(lA&&lB&&isFinite(lA)&&isFinite(lB)){const top=Math.max(lA,lB),bot=Math.min(lA,lB);
+      sc+=price>top?14:price<bot?-14:0;
     }
   }catch(_){}
   // ADX + DI — trend strength + direction
+  // FIX2: calcADX returns .mdi (Minus DI), not .ndi
   try{
     const adxR=calcADX(H,L,C,14);
-    const adxVal=adxR.adx[adxR.adx.length-1]||0,pdi=adxR.pdi[adxR.pdi.length-1]||0,ndi=adxR.ndi[adxR.ndi.length-1]||0;
-    if(adxVal>20) sc+=(pdi>ndi?1:-1)*Math.min(12,adxVal*0.4); // strong trend in DI direction
+    const adxVal=adxR.adx[adxR.adx.length-1]||0,pdi=adxR.pdi[adxR.pdi.length-1]||0,mdi=adxR.mdi[adxR.mdi.length-1]||0;
+    if(adxVal>20) sc+=(pdi>mdi?1:-1)*Math.min(12,adxVal*0.4);
   }catch(_){}
   // OBV trend — 10-bar slope (buying vs selling volume pressure)
   try{const obv=calcOBV(C,V);if(obv.length>10) sc+=obv[obv.length-1]>obv[obv.length-10]?8:-8;}catch(_){}
@@ -726,7 +728,8 @@ function getAdaptiveWeights(){
   }
   // Normalize: keep the total weight sum stable (same as base total ~1.09)
   const baseSum=Object.values(_MODULE_BASE_W).reduce((a,b)=>a+b,0);
-  const factor=baseSum/adaptedSum;
+  // FIX3: guard divide-by-zero (adaptedSum=0 if all modules have 0 base weight)
+  const factor=adaptedSum>0?baseSum/adaptedSum:1;
   for(const name of Object.keys(adapted)) adapted[name]=adapted[name]*factor;
   return adapted;
 }
@@ -2740,7 +2743,8 @@ const App=()=>{
       // impulse / continuation
       return{color:'rgba(255,200,0,.85)',borderColor:'#FFC800',wickColor:'#FFC800'};
     };
-    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>{const col=_ghostCol(c.patternType);return{time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,...col};}).filter(c=>c.open&&c.close);
+    // FIX6: filter out NaN/Infinity ghost candles that would corrupt the chart
+    const fut=(setup?.future_candles||[]).slice(0,maxF).map((c,i)=>{const col=_ghostCol(c.patternType);return{time:last+delta*(i+1),open:+c.open,high:+c.high,low:+c.low,close:+c.close,...col};}).filter(c=>c.open&&c.close&&isFinite(c.open)&&isFinite(c.high)&&isFinite(c.low)&&isFinite(c.close)&&c.high>=c.low);
     const merged=[...hist,...fut].sort((a,b)=>a.time-b.time);
     cSeries.current.setData(merged);
     chartInst.current.timeScale().scrollToRealTime();
@@ -2836,8 +2840,10 @@ const App=()=>{
     setWsStatus('connecting');
     if(!isCrypto(symbol)){setWsStatus('delayed');return;}
     let dead=false;
+    let reconnectTimer=null; // FIX5: track timer to prevent stacking reconnects
     const connect=()=>{
       if(dead)return;
+      clearTimeout(reconnectTimer);
       const sym=symbol.replace('/','').toLowerCase();
       // Use futures WS when: PERP mode is ON, or symbol is known futures-only
       const isFut=_usePerpData||FUTURES_ONLY.has(sym.toUpperCase());
@@ -2845,7 +2851,7 @@ const App=()=>{
       const ws=new WebSocket(wsUrl);
       wsRef.current=ws;
       ws.onopen=()=>setWsStatus('live');
-      ws.onclose=()=>{setWsStatus('reconnecting');if(!dead)setTimeout(connect,3000);};
+      ws.onclose=(e)=>{if(dead)return;setWsStatus('reconnecting');clearTimeout(reconnectTimer);reconnectTimer=setTimeout(connect,3000);};
       ws.onerror=()=>setWsStatus('error');
       ws.onmessage=e=>{
         try{
@@ -2877,7 +2883,7 @@ const App=()=>{
       };
     };
     connect();
-    return()=>{dead=true;try{wsRef.current?.close();}catch(_){}};
+    return()=>{dead=true;clearTimeout(reconnectTimer);try{wsRef.current?.close();}catch(_){}};
   },[symbol,tf,usePerp]);
 
   // ── Module accuracy tracking: evaluate each module when a new candle closes ──
@@ -2893,9 +2899,9 @@ const App=()=>{
       }
     }
     lastCandleTsRef.current=latestTs;
-    // Store current module features for evaluation on NEXT candle close
-    if(masterBias?.features) lastBiasForAccRef.current=masterBias.features;
-  },[candles]);
+    // FIX4: deep-copy features so mutations don't corrupt the snapshot
+    if(masterBias?.features) lastBiasForAccRef.current=masterBias.features.map(f=>({...f}));
+  },[candles,masterBias]);
 
   // FS auto-connect on mount (re-uses permission from previous session)
   useEffect(()=>{
