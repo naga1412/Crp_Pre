@@ -3868,15 +3868,18 @@ const App=()=>{
                         </div>
                       );
                     })}
-                    {Object.values(_modAccStats).some(s=>s.total>=10)&&(
-                      <div style={{fontSize:9,color:'#555',marginTop:6,borderTop:'1px solid #1e222d',paddingTop:4}}>
-                        🤖 Weights are self-adjusting based on live accuracy. Best module: {
-                          Object.entries(_modAccStats)
-                            .filter(([,s])=>s.total>=10)
-                            .sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[0]||'—'
-                        } ({Math.round((Object.entries(_modAccStats).filter(([,s])=>s.total>=10).sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[1]?.correct/Object.entries(_modAccStats).filter(([,s])=>s.total>=10).sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[1]?.total*100)||0}%)
-                      </div>
-                    )}
+                    {(()=>{
+                      const ranked=Object.entries(_modAccStats).filter(([,s])=>s.total>=10).sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total);
+                      if(!ranked.length) return null;
+                      const [bestName,bestSt]=ranked[0];
+                      const bestAcc=Math.round(bestSt.correct/bestSt.total*100);
+                      return(
+                        <div style={{fontSize:9,color:'#555',marginTop:6,borderTop:'1px solid #1e222d',paddingTop:4}}>
+                          🤖 Weights self-adjust per accuracy. Best: <span style={{color:'#26a69a'}}>{bestName} {bestAcc}%</span>
+                          {ranked.length>1&&<span> · Worst: <span style={{color:'#ef5350'}}>{ranked[ranked.length-1][0]} {Math.round(ranked[ranked.length-1][1].correct/ranked[ranked.length-1][1].total*100)}%</span></span>}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </>)}
               </Section>
