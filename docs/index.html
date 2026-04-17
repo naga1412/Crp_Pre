@@ -2626,7 +2626,8 @@ const App=()=>{
     const connect=()=>{
       if(dead)return;
       const sym=symbol.replace('/','').toLowerCase();
-      const isFut=FUTURES_ONLY.has(sym.toUpperCase());
+      // Use futures WS when: PERP mode is ON, or symbol is known futures-only
+      const isFut=_usePerpData||FUTURES_ONLY.has(sym.toUpperCase());
       const wsUrl=isFut?`${BINANCE_FWS}/${sym}@kline_${tf}`:`${BINANCE_WS}/${sym}@kline_${tf}`;
       const ws=new WebSocket(wsUrl);
       wsRef.current=ws;
@@ -2637,18 +2638,34 @@ const App=()=>{
         try{
           const k=JSON.parse(e.data).k;
           if(!k)return;
-          setLivePrice(+k.c);
+          const close=+k.c,open=+k.o,high=+k.h,low=+k.l,vol=+k.v||0;
+          setLivePrice(close);
           const t=Math.floor(+k.t/1000);
           if(t>0&&cSeries.current){
-            cSeries.current.update({time:t,open:+k.o,high:+k.h,low:+k.l,close:+k.c});
-            vSeries.current?.update({time:t,value:+k.v||0,color:+k.c>=+k.o?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'});
+            cSeries.current.update({time:t,open,high,low,close});
+            vSeries.current?.update({time:t,value:vol,color:close>=open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'});
+            // Live-update last candle in state so indicators stay current
+            setCandles(prev=>{
+              if(!prev||!prev.length) return prev;
+              const last=prev[prev.length-1];
+              if(last.timestamp===t){
+                // Update existing last candle
+                const updated=[...prev];
+                updated[updated.length-1]={...last,open,high,low,close,volume:vol};
+                return updated;
+              } else if(t>last.timestamp){
+                // New candle arrived — append
+                return [...prev,{timestamp:t,open,high,low,close,volume:vol}];
+              }
+              return prev;
+            });
           }
         }catch(_){}
       };
     };
     connect();
     return()=>{dead=true;try{wsRef.current?.close();}catch(_){}};
-  },[symbol,tf]);
+  },[symbol,tf,usePerp]);
 
   // FS auto-connect on mount (re-uses permission from previous session)
   useEffect(()=>{
