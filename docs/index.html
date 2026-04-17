@@ -45,6 +45,7 @@ body{background:#131722;color:#d1d4dc;font-family:'Inter',sans-serif;overflow:hi
 .nbear{background:#ef535022;color:#ef5350;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
 .nneutral{background:#787b8622;color:#787b86;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 .tab-btn{padding:5px 16px;border:none;cursor:pointer;font-size:12px;font-weight:600;border-radius:6px 6px 0 0;transition:all .2s}
 .tab-btn.active{background:#1e222d;color:#2962ff;border-bottom:2px solid #2962ff}
 .tab-btn:not(.active){background:transparent;color:#787b86}
@@ -2137,7 +2138,8 @@ function _MsgBubble({msg,isUser,isDeepSeek,onFileReq}){
           borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',
           padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',
           whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
-          {msg.content}
+          {msg.content||(!msg.streaming&&'(no response)')||''}
+          {msg.streaming&&<span style={{display:'inline-block',width:7,height:13,background:'#5b9bd5',marginLeft:2,verticalAlign:'middle',borderRadius:1,animation:'blink 0.8s step-end infinite'}}>&#8203;</span>}
           {msg.type==='fileReq'&&(
             <button onClick={()=>onFileReq&&onFileReq(msg.req)}
               style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,
@@ -2415,9 +2417,16 @@ ${modLines}
   const doChat=async(q)=>{
     const ctx=marketContext||{};
     const isDeep=provider==='deepseek';
-    const ctxStr=_buildCtxStr(ctx,isDeep); // DeepSeek gets full module accuracy
+
+    // Detect simple/conversational messages — skip heavy market context for speed
+    const _isSimple=/^(hi|hello|hey|thanks|ok|okay|yes|no|sure|bye|good|great|test|lol|cool|nice|wow|help|what|who|how|why|when|where)[\s!?.]*$/i.test(q.trim())||q.trim().length<12;
+
+    const ctxStr=(!_isSimple)||!isDeep?_buildCtxStr(ctx,isDeep):''; // skip context for greetings
     const sys=isDeep
-      ?`You are DeepSeek-R1, the AI Supervisor embedded inside SMC Pro Analyzer. You control a 12-module market analysis system plus a custom neural network that trains continuously on real candle data across all timeframes.
+      ?(_isSimple
+        // Minimal system prompt for conversational messages → much faster
+        ?`You are DeepSeek-R1, an AI assistant inside SMC Pro Analyzer (crypto trading app). Answer concisely.`
+        :`You are DeepSeek-R1, the AI Supervisor embedded inside SMC Pro Analyzer. You control a 12-module market analysis system plus a custom neural network that trains continuously on real candle data across all timeframes.
 ${ctxStr}
 YOUR ANALYSIS RULES — follow these for every response:
 
@@ -2433,20 +2442,76 @@ YOUR ANALYSIS RULES — follow these for every response:
 
 6. FINAL DECISION: Always end with a clear LONG / SHORT / WAIT with specific reasoning from the module scores and NN data.
 
-Keep responses under 500 words. Use module names and exact numbers from the data.`
+Keep responses under 400 words. Use module names and exact numbers from the data.`)
       :`You are a helpful, friendly AI assistant embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool.
 ${ctxStr}
 Guidelines:
 - For trading/market questions: be specific, actionable, reference the live data above
 - For general questions: just answer helpfully
-- Keep responses concise (under 400 words)
+- Keep responses concise (under 300 words)
 - Be conversational and friendly`;
-    const raw=await callLLM(sys,q,isDeep?1000:800);
+
     if(isDeep){
-      const{thinking,answer}=_parseDeepSeek(raw);
-      // Always store clean answer in content; thinking goes in separate field for _MsgBubble
-      addMsg('assistant', answer||'(no response)', thinking&&thinking.length>10?{thinking}:{});
+      // ── STREAMING path for DeepSeek — tokens appear in real-time ──────────────
+      // Add placeholder message immediately; update it as chunks arrive
+      const sid=Date.now();
+      setMessages(prev=>[...prev,{role:'assistant',content:'',thinking:'',streaming:true,_sid:sid}]);
+      let accContent='',accThinking='',lastFlush=0;
+
+      const flushMsg=(done)=>{
+        setMessages(prev=>prev.map(m=>m._sid===sid?{
+          ...m,
+          content:accContent||(done?'(no response)':''),
+          thinking:accThinking,
+          streaming:!done
+        }:m));
+      };
+
+      try{
+        const url=`${ollamaUrl}/api/chat`;
+        const resp=await fetch(url,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:ollamaModel,
+            messages:[{role:'system',content:sys},{role:'user',content:q}],
+            stream:true,
+            options:{num_predict:_isSimple?250:650,temperature:0.6}
+          })
+        });
+        if(!resp.ok){
+          if(resp.status===403) throw new Error('Ollama CORS 403 — run start_ollama.bat first');
+          throw new Error(`Ollama ${resp.status}`);
+        }
+        const reader=resp.body.getReader();
+        const dec=new TextDecoder();
+        let buf='';
+        while(true){
+          const{done,value}=await reader.read();
+          if(done) break;
+          buf+=dec.decode(value,{stream:true});
+          const lines=buf.split('\n');
+          buf=lines.pop()||'';
+          for(const line of lines){
+            if(!line.trim()) continue;
+            try{
+              const chunk=JSON.parse(line);
+              accContent+=chunk.message?.content||'';
+              accThinking+=chunk.message?.thinking||'';
+              const now=Date.now();
+              if(now-lastFlush>80||chunk.done){lastFlush=now;flushMsg(!!chunk.done);}
+            }catch(_){}
+          }
+        }
+        flushMsg(true); // ensure final state
+        // Add to conversation history (clean content, no thinking)
+        historyRef.current=[...historyRef.current,{role:'assistant',content:accContent}];
+      }catch(e){
+        setMessages(prev=>prev.map(m=>m._sid===sid?{...m,content:`❌ ${e.message}`,streaming:false}:m));
+      }
     }else{
+      // Non-DeepSeek providers: standard non-streaming path
+      const raw=await callLLM(sys,q,800);
       addMsg('assistant',raw);
     }
   };
@@ -2465,7 +2530,8 @@ Guidelines:
 6. **Ghost Candle Reliability** — Given the module agreement ratio and NN accuracy, how much should we trust the predicted candles?
 7. **Trade Decision** — Go LONG, SHORT, or WAIT? Specific entry, SL, TP with reasoning.`;
     addMsg('user','🧠 Auto-Analyze (DeepSeek full analysis)');
-    setLoading(true);
+    // doChat handles streaming internally for DeepSeek — no blocking loader needed
+    if(provider!=='deepseek') setLoading(true);
     try{await doChat(prompt);}
     finally{setLoading(false);}
   };
@@ -2512,7 +2578,9 @@ Rules:
     if(provider!=='deepseek'&&!apiKey){addMsg('assistant','⚠️ Please enter your API key first (click the key icon above).');return;}
     setInput('');
     addMsg('user',t);
-    setLoading(true);
+    // DeepSeek uses streaming — no blocking spinner (tokens appear live)
+    // Non-DeepSeek: show loading overlay while waiting
+    if(provider!=='deepseek') setLoading(true);
     try{
       // Disable code modification for local DeepSeek — too slow for large file on 8B model
       if(provider!=='deepseek'&&isCodeReq(t)) await doCodeMod(t);
