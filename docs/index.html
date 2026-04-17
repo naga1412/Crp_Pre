@@ -2068,6 +2068,61 @@ function Sparkline({data,color,w=60,h=20}){
 }
 
 // ─── AI CHAT TAB ─────────────────────────────────────────────────────────────
+// Standalone message bubble — needs its own useState so it can be used safely inside map()
+function _MsgBubble({msg,isUser,isDeepSeek,onFileReq}){
+  const[showThink,setShowThink]=useState(false);
+  const hasThinking=!!msg.thinking;
+  return(
+    <div style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:8,marginBottom:12,alignItems:'flex-start'}}>
+      <div style={{width:26,height:26,borderRadius:'50%',flexShrink:0,
+        background:isUser?'#2962ff':'#12172a',
+        border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,
+        display:'flex',alignItems:'center',justifyContent:'center',fontSize:12}}>
+        {isUser?'👤':isDeepSeek?'🐋':'🤖'}
+      </div>
+      <div style={{maxWidth:'85%'}}>
+        {hasThinking&&(
+          <div style={{marginBottom:4}}>
+            <button onClick={()=>setShowThink(v=>!v)}
+              style={{background:'#1a1f2e',border:'1px solid #2a2e39',borderRadius:5,
+                color:'#4a8f6f',fontSize:9,padding:'2px 8px',cursor:'pointer',fontStyle:'italic'}}>
+              {showThink?'▲ Hide reasoning':'▼ Show DeepSeek reasoning'}
+            </button>
+            {showThink&&(
+              <div style={{marginTop:4,padding:'6px 10px',background:'#0d1117',
+                border:'1px solid #1e3a2e',borderRadius:5,fontSize:10,color:'#4a8f6f',
+                whiteSpace:'pre-wrap',lineHeight:1.55,fontStyle:'italic',maxHeight:180,overflowY:'auto'}}>
+                {msg.thinking}
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{background:isUser?'#2962ff22':'#1e222d',
+          border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,
+          borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',
+          padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',
+          whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
+          {msg.content}
+          {msg.type==='fileReq'&&(
+            <button onClick={()=>onFileReq&&onFileReq(msg.req)}
+              style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,
+                padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+              📂 Select index.html
+            </button>
+          )}
+          {msg.type==='success'&&(
+            <button onClick={()=>location.reload()}
+              style={{display:'block',marginTop:8,background:'#26a69a',border:'none',borderRadius:5,
+                padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+              🔄 Reload Now
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AIChatTab({marketContext}){
   const[apiKey,setApiKey]=useState(()=>localStorage.getItem('smc_ai_api_key')||'');
   const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'deepseek');
@@ -2250,41 +2305,75 @@ function AIChatTab({marketContext}){
     return /\b(btc|eth|sol|crypto|stock|trade|trading|signal|long|short|rsi|macd|ema|candle|chart|price|market|bull|bear|buy|sell|position|leverage|entry|stop|target|profit|loss|bias|indicator|volume|funding|fear|greed|wyckoff|fibonacci|support|resistance|breakout|trend|momentum|divergence|neural|nn|prediction|ghost|scanner|analysis|atr|bb|bollinger|stoch|cmf|oi|vp|poc|vah|val)\b/.test(lo);
   };
 
-  // Build full market context string — richer for DeepSeek since it can reason deeply
+  // Module descriptions — explains each module to DeepSeek so it can reason correctly
+  const _MOD_DESC={
+    'SMC':          'Smart Money Concepts — order blocks, FVGs, BOS, liquidity sweeps. +ve = bullish SMC structure',
+    'Wyckoff':      'Wyckoff phases — Accumulation/Markup = bullish, Distribution/Markdown = bearish. +ve = accumulation',
+    'VP':           'Volume Profile — price vs POC/VAH/VAL. +ve = price above POC (buyers in control)',
+    'Momentum':     'EMA stack, MACD, RSI, rate-of-change composite. +ve = bullish momentum building',
+    'Microstructure':'Order flow imbalance, wick rejection, body ratio, CMF. +ve = buying pressure dominates',
+    'OI/Funding':   'Open Interest trend + funding rate. Negative funding+rising OI = short squeeze potential',
+    'Sentiment':    'Fear & Greed index. Extreme fear (<25) = contrarian LONG. Extreme greed (>75) = contrarian SHORT',
+    'Intermarket':  'BTC dominance, DXY, SPX correlation. +ve = macro tailwind for this asset',
+    'PDH/PDL Sweep':'Previous Day High/Low liquidity sweep. Swept PDL then reclaimed = bullish. Swept PDH then rejected = bearish',
+    'L/S Ratio':    'Long/Short ratio (crowd positioning). >65% long = crowded = contrarian bearish. <35% long = contrarian bullish',
+    'RS vs BTC':    'Relative strength vs BTC over 20 bars. +ve = outperforming BTC (bullish rotation into this coin)',
+    'TA Indicators':'EMA200, Parabolic SAR, VWAP, Ichimoku cloud, ADX+DI, OBV, MFI, CCI, Williams%R composite',
+  };
+
+  // Build complete market context — all 12 modules with meaning, score, weight, accuracy
   const _buildCtxStr=(ctx,deep=false)=>{
     if(!ctx?.symbol) return '';
     const mods=(ctx.features||[]);
-    const modLines=mods.length?mods.map(f=>`  ${f.n}: score=${f.v>0?'+':''}${f.v||0} weight=${((f.w||0)*100).toFixed(0)}% acc=${f.acc!=null?Math.round(f.acc*100)+'%':'?'}`).join('\n'):'  (no module data yet)';
-    // Load module accuracy from localStorage for deeper context
-    let modAccLines='';
-    if(deep){
-      try{
-        const ma=JSON.parse(localStorage.getItem('smc_mod_acc_v1')||'{}');
-        modAccLines='\nModule rolling accuracy (last 50 candles):\n'+Object.entries(ma).map(([n,s])=>`  ${n}: ${s.total>=10?Math.round(s.correct/s.total*100)+'%':'not enough data'} (${s.total||0} candles)`).join('\n');
-      }catch(_){}
-    }
+    // Load live accuracy from localStorage (same data the adaptive weight system uses)
+    let liveAcc={};
+    try{const ma=JSON.parse(localStorage.getItem('smc_mod_acc_v1')||'{}');liveAcc=ma;}catch(_){}
+
+    const modLines=mods.length
+      ?mods.map(f=>{
+        const lv=liveAcc[f.n];
+        const accPct=lv&&lv.total>=10?Math.round(lv.correct/lv.total*100)+'% ('+lv.total+'c)':'<10 candles';
+        const bias=f.v>5?'▲BULL':f.v<-5?'▼BEAR':'─NEUTRAL';
+        const desc=_MOD_DESC[f.n]||'';
+        return `  [${bias}] ${f.n}: score=${f.v>0?'+':''}${Math.round(f.v||0)} | weight=${((f.w||0)*100).toFixed(0)}% | liveAcc=${accPct}\n         → ${desc}`;
+      }).join('\n')
+      :'  No module data yet — load a chart first';
+
+    // NN pool & accuracy stats
     const nnPoolSize=ctx.nnPoolSize||0;
+    const nnAccStr=ctx.nnRecentAcc!=null?`${ctx.nnRecentAcc}% live (last 50 validated)`:ctx.nnAcc?`${ctx.nnAcc}% training`:'?';
+
     return `
-═══ LIVE MARKET STATE ═══
-Symbol: ${ctx.symbol} | TF: ${ctx.tf} | Price: ${ctx.price}
-Signal: ${ctx.aiSignal||'?'} | Bias Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'})${ctx.aiOverride?' ⚠️ NN overrode indicators':''}
+═══════════════════════════════════════════════════
+  LIVE MARKET STATE  —  ${ctx.symbol} / ${ctx.tf}
+═══════════════════════════════════════════════════
+Price : ${ctx.price||'?'}
+Signal: ${ctx.aiSignal||'?'} | Bias Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'})${ctx.aiOverride?' ⚠️ NN OVERRODE indicators':''}
+HTF   : ${ctx.htfBias||'?'} | Wyckoff: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'}
 RSI(14): ${ctx.rsi||'?'} | StochRSI K: ${ctx.stochK||'?'} | MACD hist: ${ctx.macdHist||'?'} | CMF: ${ctx.cmf||'?'}
-Wyckoff: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'} | HTF Bias: ${ctx.htfBias||'?'}
-VP: POC=${ctx.poc||'?'} VAH=${ctx.vah||'?'} VAL=${ctx.val||'?'}
-Entry: ${ctx.price} | SL: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
-OI Funding: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
-PDH: ${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' [SWEPT ⚡]':''} | PDL: ${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' [SWEPT ⚡]':''}
-L/S Ratio: Long ${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%':'?'} / Short ${ctx.lsShortPct!=null?ctx.lsShortPct.toFixed(1)+'%':'?'}${ctx.lsLongPct>65?' (crowd overly Long → bearish lean)':ctx.lsShortPct>65?' (crowd overly Short → bullish lean)':''}
-RS vs BTC: Coin ${ctx.rsCoinChg!=null?(ctx.rsCoinChg>=0?'+':'')+ctx.rsCoinChg.toFixed(2)+'%':'?'} | BTC ${ctx.rsBtcChg!=null?(ctx.rsBtcChg>=0?'+':'')+ctx.rsBtcChg.toFixed(2)+'%':'?'} | Delta ${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'} (${ctx.rsSignal||'?'})
+VP    : POC=${ctx.poc||'?'} | VAH=${ctx.vah||'?'} | VAL=${ctx.val||'?'}
+Trade : Entry=${ctx.price} | SL=${ctx.sl||'?'} | TP1=${ctx.tp1||'?'} | TP2=${ctx.tp2||'?'}
 
-═══ AI SUPERVISOR (Custom NN + 12 Modules) ═══
-NN Probability: ${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(1)+'%':'?'} | Signal: ${ctx.nnSignal||'?'} | Confidence: ${ctx.nnConf||'?'}%
-NN Accuracy: ${ctx.nnRecentAcc!=null?ctx.nnRecentAcc+'% (live rolling)':ctx.nnAcc+'% (training)'} | Corrections: ${ctx.nnCorrections||0} | Pool: ${nnPoolSize.toLocaleString()} cross-TF examples
-Expected move: ${ctx.nnMag!=null?Math.round(ctx.nnMag*100)+'%':'?'} of 2×ATR | Expected range: ${ctx.nnVol!=null?Math.round(ctx.nnVol*100)+'%':'?'} of 3×ATR
-AI Override: ${ctx.aiOverride?'YES — NN disagrees with indicators':'No'}
+Funding Rate: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
+PDH: ${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' ⚡SWEPT':''}  PDL: ${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' ⚡SWEPT':''}
+L/S : Long ${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%':'?'} / Short ${ctx.lsShortPct!=null?ctx.lsShortPct.toFixed(1)+'%':'?'}${ctx.lsLongPct>65?' → CROWDED LONG (contrarian bearish)':ctx.lsShortPct>65?' → CROWDED SHORT (contrarian bullish)':''}
+RS vs BTC: ${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'} (${ctx.rsSignal||'?'}) | Coin ${ctx.rsCoinChg!=null?(ctx.rsCoinChg>=0?'+':'')+ctx.rsCoinChg.toFixed(2)+'%':'?'} vs BTC ${ctx.rsBtcChg!=null?(ctx.rsBtcChg>=0?'+':'')+ctx.rsBtcChg.toFixed(2)+'%':'?'}
 
-═══ 12-MODULE SCORES (w = adaptive weight, acc = rolling accuracy) ═══
-${modLines}${modAccLines}
+═══════════════════════════════════════════════════
+  CUSTOM NEURAL NETWORK (continuous self-learning)
+═══════════════════════════════════════════════════
+Direction probability : ${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(1)+'%':'?'} bullish | Signal: ${ctx.nnSignal||'?'} | Conf: ${ctx.nnConf||'?'}%
+Accuracy              : ${nnAccStr} | Self-corrections: ${ctx.nnCorrections||0}
+Expected candle body  : ${ctx.nnMag!=null?Math.round(ctx.nnMag*100)+'%':'?'} of 2×ATR (ghost candle size)
+Expected candle range : ${ctx.nnVol!=null?Math.round(ctx.nnVol*100)+'%':'?'} of 3×ATR (ghost candle wick)
+Training pool         : ${nnPoolSize.toLocaleString()} examples from all timeframes visited
+AI Override active    : ${ctx.aiOverride?'YES — NN contradicts indicator consensus':'No — NN agrees with indicators'}
+
+═══════════════════════════════════════════════════
+  ALL 12 ANALYSIS MODULES  (score: -100 to +100)
+  Higher accuracy = more reliable for prediction
+═══════════════════════════════════════════════════
+${modLines}
 `;
   };
 
@@ -2293,15 +2382,23 @@ ${modLines}${modAccLines}
     const isDeep=provider==='deepseek';
     const ctxStr=_buildCtxStr(ctx,isDeep); // DeepSeek gets full module accuracy
     const sys=isDeep
-      ?`You are DeepSeek-R1, an expert quantitative trading analyst embedded inside SMC Pro Analyzer. You have access to a 12-module AI scoring system with a custom neural network that learns continuously from candle data across all timeframes.
+      ?`You are DeepSeek-R1, the AI Supervisor embedded inside SMC Pro Analyzer. You control a 12-module market analysis system plus a custom neural network that trains continuously on real candle data across all timeframes.
 ${ctxStr}
-Your role:
-- Provide deep, reasoned market analysis using ALL the data above
-- Explain WHY modules agree/disagree and what that means for the trade
-- Be specific: reference exact scores, accuracy numbers, and signal values
-- Identify the highest-accuracy modules and weight them appropriately in your conclusion
-- Keep answers focused and actionable (under 500 words)
-- Use the <think> block to reason privately, then give a clean final answer`
+YOUR ANALYSIS RULES — follow these for every response:
+
+1. MODULE WEIGHTING: Modules with higher liveAcc are more reliable. Weight them more heavily. Ignore or flag modules with <10 candles (insufficient data).
+
+2. CONSENSUS READING: Count how many of the 12 modules show BULL vs BEAR scores. If 8+ agree → high conviction. If split 6/6 → conflict → caution.
+
+3. NEURAL NETWORK INTEGRATION: The NN's probability output (0-100% bullish) is a learned pattern from all historical candles. If NN and module consensus AGREE → very high conviction. If they DISAGREE (aiOverride=YES) → be cautious, explain why the conflict exists.
+
+4. GHOST CANDLE PREDICTION: The NN predicts body size (% of 2×ATR) and range (% of 3×ATR). Use these with module scores to predict next candle character: large body impulse, inside bar, pullback, etc.
+
+5. CONTRARIAN SIGNALS: L/S Ratio >65% long = crowded = fade the long. PDH/PDL sweeps = liquidity grab = reversal likely. Funding rate extreme = squeeze potential.
+
+6. FINAL DECISION: Always end with a clear LONG / SHORT / WAIT with specific reasoning from the module scores and NN data.
+
+Keep responses under 500 words. Use module names and exact numbers from the data.`
       :`You are a helpful, friendly AI assistant embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool.
 ${ctxStr}
 Guidelines:
@@ -2312,12 +2409,8 @@ Guidelines:
     const raw=await callLLM(sys,q,isDeep?1000:800);
     if(isDeep){
       const{thinking,answer}=_parseDeepSeek(raw);
-      if(thinking&&thinking.length>20){
-        // Add thinking as a collapsible note
-        addMsg('assistant',`🤔 *[DeepSeek reasoned for ${thinking.split(' ').length} words — tap to see]*\n\n${answer}`,{thinking});
-      }else{
-        addMsg('assistant',answer);
-      }
+      // Always store clean answer in content; thinking goes in separate field for _MsgBubble
+      addMsg('assistant', answer||'(no response)', thinking&&thinking.length>10?{thinking}:{});
     }else{
       addMsg('assistant',raw);
     }
@@ -2465,54 +2558,17 @@ Rules:
 
       {/* Messages */}
       <div style={{flex:1,overflowY:'auto',padding:12}}>
-        {messages.map((msg,i)=>{
-          const isUser=msg.role==='user';
-          const hasThinking=!!msg.thinking;
-          const[showThink,setShowThink]=React.useState(false);
-          return(
-            <div key={i} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:8,marginBottom:12,alignItems:'flex-start'}}>
-              <div style={{width:26,height:26,borderRadius:'50%',flexShrink:0,background:isUser?'#2962ff':'#12172a',border:`1px solid ${isUser?'#2962ff':'#2a2e39'}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11}}>
-                {isUser?'👤':provider==='deepseek'?'🐋':'🤖'}
-              </div>
-              <div style={{maxWidth:'85%'}}>
-                {/* DeepSeek thinking toggle */}
-                {hasThinking&&(
-                  <div style={{marginBottom:4}}>
-                    <button onClick={()=>setShowThink(v=>!v)}
-                      style={{background:'#1a1f2e',border:'1px solid #2a2e39',borderRadius:5,color:'#787b86',fontSize:9,padding:'2px 8px',cursor:'pointer',fontStyle:'italic'}}>
-                      {showThink?'▲ Hide reasoning':'▼ Show DeepSeek reasoning'}
-                    </button>
-                    {showThink&&<div style={{marginTop:4,padding:'6px 10px',background:'#0d1117',border:'1px solid #1e3a2e',borderRadius:5,fontSize:10,color:'#4a8f6f',whiteSpace:'pre-wrap',lineHeight:1.55,fontStyle:'italic',maxHeight:160,overflowY:'auto'}}>
-                      {msg.thinking}
-                    </div>}
-                  </div>
-                )}
-                <div style={{background:isUser?'#2962ff22':'#1e222d',border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
-                  {/* Strip the [thinking] prefix line if it was injected */}
-                  {msg.content.replace(/^🤔 \*\[DeepSeek reasoned.*?\]\*\n\n/,'')}
-                  {msg.type==='fileReq'&&(
-                    <button onClick={async()=>{
-                      try{
-                        const[fh]=await window.showOpenFilePicker({types:[{description:'HTML',accept:{'text/html':['.html']}}]});
-                        setLoading(true);
-                        addMsg('assistant',`📂 ${fh.name} selected — applying change...`);
-                        await applyCode(msg.req,fh);
-                      }catch(e){if(e.name!=='AbortError')addMsg('assistant',`❌ ${e.message}`);}
-                      finally{setLoading(false);}
-                    }} style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
-                      📂 Select index.html
-                    </button>
-                  )}
-                  {msg.type==='success'&&(
-                    <button onClick={()=>location.reload()} style={{display:'block',marginTop:8,background:'#26a69a',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
-                      🔄 Reload Now
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
+        {messages.map((msg,i)=>(
+          <_MsgBubble key={i} msg={msg} isUser={msg.role==='user'} isDeepSeek={provider==='deepseek'}
+            onFileReq={async(req)=>{
+              try{const[fh]=await window.showOpenFilePicker({types:[{description:'HTML',accept:{'text/html':['.html']}}]});
+                setLoading(true);addMsg('assistant',`📂 ${fh.name} selected — applying change...`);
+                await applyCode(req,fh);
+              }catch(e){if(e.name!=='AbortError')addMsg('assistant',`❌ ${e.message}`);}
+              finally{setLoading(false);}
+            }}
+          />
+        ))}
         {loading&&(
           <div style={{display:'flex',alignItems:'center',gap:8,color:'#787b86',fontSize:11,padding:'4px 0 4px 34px'}}>
             <span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>{provider==='deepseek'?'🐋':'⚙️'}</span>
