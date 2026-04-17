@@ -644,6 +644,8 @@ const _NN_KEY='smc_deep_nn_v7';
 const _NN_STATS_KEY='smc_deep_stats_v7';
 const _NN_OUTCOMES_KEY='smc_deep_outcomes_v7'; // pending predictions awaiting validation
 const _NN_NEWS_KEY='smc_deep_news_v7'; // news→price reaction memory
+const _NN_POOL_KEY='smc_nn_pool_v1';   // cross-TF training pool — accumulates examples from ALL timeframes
+const _NN_POOL_MAX=3000;               // rolling cap: keeps localStorage under ~4 MB
 
 // Feature vector size per candle: 12 → 8-candle window = 96 inputs
 const SEQ_LEN=8;
@@ -798,7 +800,22 @@ function _buildLabels(candles,idx){
   return[dir,mag,vol];
 }
 
-// Train on fresh candle batch + merge stored correction samples for self-correction
+// ── Cross-TF pool helpers ──────────────────────────────────────────────────────
+// Every TF the user visits contributes training examples to a shared persistent pool.
+// This means the NN learns from 1m, 5m, 15m, 1h, 4h and 1d candles simultaneously,
+// not just the currently displayed timeframe.
+function _loadPool(){
+  try{const s=localStorage.getItem(_NN_POOL_KEY);if(s){const p=JSON.parse(s);if(Array.isArray(p))return p;}}catch(_){}
+  return[];
+}
+function _savePool(pool){
+  try{localStorage.setItem(_NN_POOL_KEY,JSON.stringify(pool));}catch(_){
+    // localStorage full — trim pool by 20% and retry
+    try{const trimmed=pool.slice(Math.floor(pool.length*0.2));localStorage.setItem(_NN_POOL_KEY,JSON.stringify(trimmed));}catch(_2){}
+  }
+}
+
+// Train on fresh candle batch + cross-TF pool + correction samples for self-correction
 function trainNNOnCandles(candles){
   if(!candles||candles.length<SEQ_LEN+40) return null;
   // Skip if candle count hasn't grown by at least 2 since last training
@@ -809,38 +826,56 @@ function trainNNOnCandles(candles){
   if(newCount-lastCount<2&&!hasFreshCorrections) return null; // nothing new to learn
   _nnStats._lastTrainCandleCount=newCount;
   const net=_getNN();
-  const data=[];
-  // Build training pairs from current batch
+
+  // ── 1. Build fresh training pairs from CURRENT TF candles ──
+  const freshData=[];
   for(let i=SEQ_LEN+20;i<candles.length-1;i++){
     const inp=_buildSequenceInput(candles,i);
     if(!inp) continue;
     const lbl=_buildLabels(candles,i);
     if(!lbl) continue;
-    data.push({input:inp,output:lbl,weight:1});
+    freshData.push({input:inp,output:lbl,weight:1});
   }
-  if(data.length<20) return null;
-  // Add stored error-correction samples with 5x weight (model learns harder from its mistakes)
+  if(freshData.length<20) return null;
+
+  // ── 2. Update cross-TF pool — append fresh examples, rolling-cap at _NN_POOL_MAX ──
+  // Sample fresh data evenly (max 600 new examples per TF load) to stay under pool cap
+  const sampleStep=Math.max(1,Math.floor(freshData.length/600));
+  const sampledFresh=freshData.filter((_,i)=>i%sampleStep===0);
+  let pool=_loadPool();
+  pool.push(...sampledFresh);
+  if(pool.length>_NN_POOL_MAX) pool=pool.slice(pool.length-_NN_POOL_MAX); // keep newest
+  _savePool(pool);
+
+  // ── 3. Merge pool + current fresh batch into training set ──
+  // Pool gives cross-TF generalization; fresh gives recency bias for current chart
+  const data=[...pool,...freshData];
+
+  // ── 4. Add stored error-correction samples with 5× weight (model learns harder from mistakes) ──
   try{
     const stored=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
     const corrections=stored.filter(o=>o.validated&&o.wrongDirection).slice(-150);
     corrections.forEach(o=>{if(o.input&&o.actualLabels){data.push({input:o.input,output:o.actualLabels,weight:5});o._trained=true;}});
     if(corrections.length) localStorage.setItem(_NN_OUTCOMES_KEY,JSON.stringify(stored));
   }catch(_2){}
-  // Train — 20 epochs is enough for convergence; 50 was the main browser lag cause
+
+  // ── 5. Train — 20 epochs balances convergence vs browser responsiveness ──
   net.train(data,0.02,20);
+
   // Accuracy on direction head
   let correct=0;
   data.forEach(d=>{const out=net.predict(d.input);if((out[0]>=0.5?1:0)===d.output[0])correct++;});
   const acc=Math.round(correct/data.length*100);
-  _nnStats.totalCandles+=data.length;
+  _nnStats.totalCandles+=freshData.length; // count only new candles (not pool replay)
   _nnStats.accuracy=Math.round(_nnStats.accuracy*0.6+acc*0.4);
   _nnStats.sessions++;
   _nnStats.lastTrained=Date.now();
+  _nnStats.poolSize=pool.length; // track pool size in stats
   try{
     localStorage.setItem(_NN_KEY,JSON.stringify(net.toJSON()));
     localStorage.setItem(_NN_STATS_KEY,JSON.stringify(_nnStats));
   }catch(_2){}
-  return{accuracy:_nnStats.accuracy,totalCandles:_nnStats.totalCandles,sessions:_nnStats.sessions,batchSize:data.length,corrections:_nnStats.corrections};
+  return{accuracy:_nnStats.accuracy,totalCandles:_nnStats.totalCandles,sessions:_nnStats.sessions,batchSize:data.length,poolSize:pool.length,corrections:_nnStats.corrections};
 }
 
 // Inference: returns {prob, magnitude, volatility, signal, confidence, accuracy, stats}
@@ -877,6 +912,8 @@ function runNNPredict(candles,symbol,tf){
       corrections:_nnStats.corrections,newsLogged:_nnStats.newsLogged,
       recentAcc:_nnStats.recentTotal?Math.round(_nnStats.recentCorrect/_nnStats.recentTotal*100):null,
       immediateRetrains:_nnStats.immediateRetrains||0,
+      poolSize:_nnStats.poolSize||0, // cross-TF training pool size
+      totalValidated:_nnStats.totalValidated||0,
       expectedMove:Math.round(magnitude*100)/100,  // 0-1 scaled move
       expectedVol:Math.round(volatility*100)/100
     };
@@ -3766,21 +3803,25 @@ const App=()=>{
                     </div>
                     {/* Stats row */}
                     <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:4,fontSize:9,color:'#787b86',borderTop:'1px solid #2a2e39',paddingTop:6}}>
-                      <div title={nnResult.recentAcc!=null?`Rolling accuracy over last ${Math.min(50,nnResult.corrections+Math.max(0,(nnResult.totalValidated||0)))} validated predictions`:'Training-set accuracy'}>
+                      <div title={nnResult.recentAcc!=null?`Rolling accuracy over last ${Math.min(50,nnResult.totalValidated||0)} validated predictions`:'Training-set accuracy'}>
                         <span style={{color:'#ab47bc'}}>🎯</span> {nnResult.recentAcc!=null?'Live':'Acc'} <b style={{color:nnResult.recentAcc!=null?(nnResult.recentAcc>=55?'#26a69a':nnResult.recentAcc<=45?'#ef5350':'#d1d4dc'):'#d1d4dc'}}>{nnResult.recentAcc!=null?nnResult.recentAcc:nnResult.accuracy}%</b>
                       </div>
-                      <div><span style={{color:'#2962ff'}}>📚</span> <b style={{color:'#d1d4dc'}}>{(nnResult.totalCandles||0).toLocaleString()}</b> candles</div>
-                      <div><span style={{color:'#26a69a'}}>🔄</span> <b style={{color:'#d1d4dc'}}>{nnResult.sessions}</b> sess</div>
+                      <div title="Unique candles seen across ALL timeframes visited"><span style={{color:'#2962ff'}}>📚</span> <b style={{color:'#d1d4dc'}}>{(nnResult.totalCandles||0).toLocaleString()}</b> candles</div>
+                      <div title={`Cross-TF training pool: examples accumulated from all timeframes (max ${_NN_POOL_MAX})`} style={{cursor:'help'}}>
+                        <span style={{color:'#26a69a'}}>🗄</span> <b style={{color:nnResult.poolSize>500?'#26a69a':nnResult.poolSize>100?'#ff9800':'#d1d4dc'}}>{(nnResult.poolSize||0).toLocaleString()}</b> pool
+                      </div>
                       <div title="Wrong past predictions auto-retrained with 5× weight"><span style={{color:'#ff9800'}}>🔧</span> <b style={{color:'#d1d4dc'}}>{nnResult.corrections||0}</b> fixes</div>
                     </div>
-                    {nnResult.immediateRetrains>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>⚡ Immediate self-correction fired <b>{nnResult.immediateRetrains}</b>× — model retrained on its mistakes in real-time.</p>}
-                    <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:4,fontSize:9,color:'#787b86',paddingTop:4}}>
-                      <div><span style={{color:'#f48fb1'}}>📰</span> News learned: <b style={{color:'#d1d4dc'}}>{nnResult.newsLogged||0}</b></div>
-                      <div style={{textAlign:'right'}}>🧠 <b style={{color:'#d1d4dc'}}>{NN_LAYERS.join(' → ')}</b></div>
+                    <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:4,fontSize:9,color:'#787b86',paddingTop:4}}>
+                      <div><span style={{color:'#26a69a'}}>🔄</span> <b style={{color:'#d1d4dc'}}>{nnResult.sessions}</b> sessions</div>
+                      <div><span style={{color:'#f48fb1'}}>📰</span> News: <b style={{color:'#d1d4dc'}}>{nnResult.newsLogged||0}</b></div>
+                      <div style={{textAlign:'right'}}>🧠 <b style={{color:'#d1d4dc'}}>{NN_LAYERS.join('→')}</b></div>
                     </div>
+                    {nnResult.immediateRetrains>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>⚡ Immediate self-correction fired <b>{nnResult.immediateRetrains}</b>× — model retrained on its mistakes in real-time.</p>}
                     {nnResult.accuracy>=55&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ Model beating random baseline (50%). Self-correction active.</p>}
-                    {nnResult.totalCandles<1000&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>⚡ Still early learning — load more charts & timeframes to accelerate.</p>}
-                    {nnResult.corrections>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>🔧 Model has auto-corrected {nnResult.corrections} past mistakes with 3× weight training.</p>}
+                    {nnResult.totalCandles<1000&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>⚡ Still early learning — switch symbols & timeframes to feed all TF data.</p>}
+                    {nnResult.corrections>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>🔧 Auto-corrected <b>{nnResult.corrections}</b> past mistakes with 5× weight re-training.</p>}
+                    {(nnResult.poolSize||0)>0&&<p style={{fontSize:9,color:'#26a69a',marginTop:2}}>🗄 Cross-TF pool: <b>{(nnResult.poolSize||0).toLocaleString()}</b> examples from all visited timeframes — model generalizes beyond current TF.</p>}
                   </>
                 ):(
                   <div style={{textAlign:'center',padding:'8px 0'}}>
