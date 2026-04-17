@@ -2174,10 +2174,25 @@ function AIChatTab({marketContext}){
           `Then check: ${ollamaUrl}/api/tags`
         );
       }
-      if(!resp.ok){const e=await resp.text().catch(()=>'');throw new Error(`Ollama ${resp.status}: ${e||'unknown error'}`);}
+      if(!resp.ok){
+        // 403 = CORS not configured
+        if(resp.status===403) throw new Error(
+          `Ollama blocked the request (CORS 403).\n\n`+
+          `You need to restart Ollama with CORS enabled.\n\n`+
+          `Double-click the file:\n  C:\\Users\\nagar\\Downloads\\claude\\start_ollama.bat\n\n`+
+          `(This sets OLLAMA_ORIGINS=* so GitHub Pages can reach it)`
+        );
+        const e=await resp.text().catch(()=>'');
+        throw new Error(`Ollama ${resp.status}: ${e||'unknown error'}`);
+      }
       const d=await resp.json();
-      const raw=d?.message?.content||d?.response||'(no response)';
-      return raw; // caller strips <think> tags via _parseDeepSeek
+      // Ollama v0.7+ returns thinking in a SEPARATE field (message.thinking),
+      // not inside <think> tags in content. Re-wrap so _parseDeepSeek handles both.
+      const nativeThinking=d?.message?.thinking||'';
+      const nativeContent=d?.message?.content||d?.response||'';
+      if(!nativeContent&&!nativeThinking) throw new Error('DeepSeek returned empty response. Try again.');
+      // Re-encode as <think>...</think> so _parseDeepSeek works uniformly
+      return nativeThinking?`<think>${nativeThinking}</think>\n${nativeContent}`:nativeContent;
     }
     // ── Google Gemini (FREE — 1500 req/day) ──
     if(provider==='gemini'){
