@@ -3,6 +3,8 @@
 
 > **Single-file React 18 in-browser app** — no build step, no server, no npm.  
 > Open `docs/index.html` in Chrome/Edge and it runs fully in the browser.
+>
+> **Current version:** ~5000 lines | Last updated: April 2026
 
 ---
 
@@ -11,48 +13,64 @@
 1. [Architecture Overview](#1-architecture-overview)
 2. [Technical Analysis (TA) Engine](#2-technical-analysis-ta-engine)
 3. [Market Structure Detectors](#3-market-structure-detectors)
-4. [The 8 Scoring Engines](#4-the-8-scoring-engines)
+4. [The 12 Analysis Modules](#4-the-12-analysis-modules)
 5. [Master Bias Score System](#5-master-bias-score-system)
 6. [Deep Learning Supervisor (Neural Network)](#6-deep-learning-supervisor-neural-network)
-7. [Ghost Candle Prediction System](#7-ghost-candle-prediction-system)
-8. [Volume Profile (VP) Engine](#8-volume-profile-vp-engine)
-9. [News Intelligence System](#9-news-intelligence-system)
-10. [Signal Stability System](#10-signal-stability-system)
-11. [AI Supervisor Override](#11-ai-supervisor-override)
-12. [Data Sources & WebSocket Feed](#12-data-sources--websocket-feed)
-13. [File System Persistence](#13-file-system-persistence)
-14. [Scanner System](#14-scanner-system)
-15. [Background Validation](#15-background-validation)
-16. [UI Layout & Tabs](#16-ui-layout--tabs)
-17. [How to Use — Trading Guidelines](#17-how-to-use--trading-guidelines)
-18. [Full Recreation Prompt](#18-full-recreation-prompt)
+7. [Cross-TF Training Pool & Multi-Window Sync](#7-cross-tf-training-pool--multi-window-sync)
+8. [Next-Candle Auto-Validation System](#8-next-candle-auto-validation-system)
+9. [Ghost Candle Prediction System](#9-ghost-candle-prediction-system)
+10. [Volume Profile (VP) Engine](#10-volume-profile-vp-engine)
+11. [News Intelligence System](#11-news-intelligence-system)
+12. [Signal Stability System](#12-signal-stability-system)
+13. [AI Supervisor Override (aiAdjustedBias)](#13-ai-supervisor-override-aiadjustedbias)
+14. [DeepSeek-R1 Integration (Local Ollama)](#14-deepseek-r1-integration-local-ollama)
+15. [Hybrid AI Decision System](#15-hybrid-ai-decision-system)
+16. [AI Chat Tab (Streaming)](#16-ai-chat-tab-streaming)
+17. [Data Sources & WebSocket Feed](#17-data-sources--websocket-feed)
+18. [File System Persistence](#18-file-system-persistence)
+19. [Scanner System — Hybrid Supervisor](#19-scanner-system--hybrid-supervisor)
+20. [Background Validation](#20-background-validation)
+21. [UI Layout & Tabs](#21-ui-layout--tabs)
+22. [How to Use — Trading Guidelines](#22-how-to-use--trading-guidelines)
+23. [Ollama Setup (Windows)](#23-ollama-setup-windows)
+24. [Full Recreation Prompt](#24-full-recreation-prompt)
 
 ---
 
 ## 1. Architecture Overview
 
 ```
-index.html (single file, ~3500 lines)
-├── HTML/CSS — TailwindCSS + custom dark-theme styles (TradingView color palette)
+index.html (single file, ~5000 lines)
+├── HTML/CSS — custom dark-theme styles (TradingView color palette)
 ├── JavaScript (Babel JSX — transpiled in-browser at runtime)
-│   ├── TA Engine          — pure-JS indicators (EMA, RSI, ATR, MACD, etc.)
-│   ├── Market Structure   — Swing detection, FVG, BOS, Liquidity Map
-│   ├── Scoring Engines    — 8 engines → weighted Master Bias Score
-│   ├── Neural Network     — 96→64→32→3 feedforward NN (pure JS)
-│   ├── Ghost Candle Sim   — NN-powered structural next-candle prediction
-│   ├── Volume Profile     — 100-bucket histogram, POC/VAH/VAL/HVN/LVN
-│   ├── News System        — 11 RSS feeds, keyword scoring, NN memory
-│   ├── FS Storage         — File System Access API → A:\crypto_prediaction_model
-│   ├── Scanner            — Multi-symbol parallel analysis
-│   └── React Components   — App, Chart, Sidebar, Scanner, News tabs
+│   ├── TA Engine            — pure-JS indicators (EMA, RSI, ATR, MACD, etc.)
+│   ├── Market Structure     — Swing detection, FVG, BOS, Liquidity Map
+│   ├── 12 Analysis Modules  — weighted Master Bias Score
+│   ├── Neural Network       — 96→64→32→3 feedforward NN (pure JS, self-correcting)
+│   ├── Cross-TF Pool        — shared 3000-example training pool (all TFs, all windows)
+│   ├── BroadcastChannel     — instant NN weight sync across browser tabs
+│   ├── Next-Candle Timer    — auto-validates ghost predictions when real candle forms
+│   ├── Ghost Candle Sim     — AI Supervisor + Hybrid NN-powered structural prediction
+│   ├── Volume Profile       — 100-bucket histogram, POC/VAH/VAL/HVN/LVN
+│   ├── News System          — 11 RSS feeds, keyword scoring, NN memory
+│   ├── FS Storage           — File System Access API → user-chosen folder
+│   ├── DeepSeek-R1          — local Ollama AI analysis (deepseek-r1:8b)
+│   ├── Hybrid AI            — DeepSeek (35%) + Supervisor (65%) blended decision
+│   ├── callOllamaJSON()     — global JSON-structured call to local Ollama
+│   ├── Scanner              — 200+ symbol parallel scan with Hybrid Supervisor
+│   ├── AI Chat Tab          — streaming DeepSeek chatbox with full market context
+│   └── React Components     — App, Chart, Sidebar, Scanner, AIChatTab, _MsgBubble
 └── CDN dependencies
     ├── React 18 (development UMD)
     ├── Babel Standalone (in-browser JSX transpile)
-    ├── Tailwind CSS (CDN)
     └── LightweightCharts 4.1.1 (TradingView chart library)
 ```
 
-**Key design principle:** Everything runs client-side. No backend. The NN trains, validates, and self-corrects entirely in the browser using localStorage + File System Access API for persistence.
+**Key design principles:**
+- Everything runs client-side. No backend. No build step.
+- NN trains, validates, and self-corrects entirely in the browser using localStorage + File System Access API.
+- DeepSeek-R1 runs locally via Ollama — no API key, no cloud, fully private.
+- Multiple browser windows on different coins/TFs all share the same NN weights via BroadcastChannel.
 
 ---
 
@@ -74,18 +92,14 @@ calcEMA(arr, period)
 calcRSI(closes, period=14)
 ```
 - Wilder's smoothed RSI
-- Signals:
-  - RSI > 70 → overbought (bearish score -15)
-  - RSI < 30 → oversold (bullish score +15)
-  - RSI > 55 → mild bullish (+8), RSI < 45 → mild bearish (-8)
-- Also used in: StochRSI, RSI Divergence detection
+- Signals: RSI > 70 → overbought (-15), RSI < 30 → oversold (+15), RSI > 55 → mild bullish (+8)
+- Used in: StochRSI, RSI Divergence detection
 
 ### 2.3 ATR (Average True Range, period=14)
 ```
 calcATR(highs, lows, closes, period=14)
 ```
 - True Range = max(H-L, |H-prevC|, |L-prevC|)
-- ATR = Wilder's smoothed TR
 - Used as: volatility unit for SL/TP levels, ghost candle sizing, signal thresholds
 
 ### 2.4 MACD (12/26/9)
@@ -95,7 +109,6 @@ calcMACD(closes, fast=12, slow=26, signal=9)
 - Returns: `{macd, signal, hist, prevHist, cross, expansion}`
 - `cross`: 'bull' (MACD crossed above signal), 'bear' (crossed below)
 - `expansion`: |hist| > |prevHist| (momentum growing)
-- Scores: Bull cross +15, Bear cross -15, hist>0 + expanding +8, etc.
 
 ### 2.5 StochRSI (14/3/3)
 ```
@@ -103,69 +116,67 @@ calcStochRSI(closes, per=14, smoothK=3, smoothD=3)
 ```
 - RSI → Stochastic of RSI → double-smoothed K and D lines
 - Returns: `{k, d}` (0-100)
-- Scores: k<20 → bullish +10, k>80 → bearish -10, k>d → +4
 
 ### 2.6 CMF (Chaikin Money Flow, period=20)
 ```
 calcCMF(candles, period=20)
 ```
 - Money Flow Multiplier = `(close-low - (high-close)) / (high-low)`
-- CMF = sum(MFM × volume) / sum(volume) over period
 - Range: -1 to +1
-- Scores: >0.05 → bullish +10, <-0.05 → bearish -10
 
 ### 2.7 Bollinger Bands (20/2)
 ```
 calcBB(closes, period=20, mult=2)
 ```
 - Returns: `{upper, middle, lower, bandwidth}`
-- Bandwidth = (upper-lower)/middle
-- Used for: BB squeeze detection, ghost candle resistance dampening, RSI divergence
+- Used for BB squeeze detection, ghost candle dampening
 
 ### 2.8 Keltner Channel (20/1.5 ATR)
 ```
 calcKeltner(candles, period=20, mult=1.5)
 ```
-- Middle = EMA(20), Bands = EMA ± 1.5×ATR
-- Used for: BB Squeeze (when BB is inside Keltner = low volatility → big move coming)
+- Used for: BB Squeeze detection (BB inside Keltner = low volatility → big move coming)
 
 ### 2.9 RSI Divergence
 ```
 detectRSIDivergence(closes, rsi)
 ```
-- Compares last 12 bars split into two 6-bar windows
-- Detects:
-  - **Bullish Regular**: price makes lower low, RSI makes higher low (+15)
-  - **Bearish Regular**: price makes higher high, RSI makes lower high (-15)
-  - **Bullish Hidden**: price makes higher low, RSI makes lower low (+15)
-  - **Bearish Hidden**: price makes lower high, RSI makes higher high (-15)
+- Compares last 12 bars in two 6-bar windows
+- Detects: Bullish/Bearish Regular and Hidden divergence (±15 score each)
 
 ### 2.10 Candle Type Classifier
 ```
 candleType(candle)
 ```
-- Body/range > 75% → Marubozu (strong momentum)
-- Body/range < 10% → Doji (indecision)
-- Lower wick > 2×body, tiny upper wick → Hammer (bullish reversal)
-- Upper wick > 2×body, tiny lower wick → Shooting Star (bearish)
+- Body/range > 75% → Marubozu | < 10% → Doji | Hammer/Shooting Star by wick ratios
 
 ### 2.11 Delta (Volume Imbalance)
 ```
 calcDelta(candles)
 ```
-- Estimates buying vs selling pressure per candle
 - `buyFraction = (close-low)/(high-low)` — proxy for buy pressure
-- Buy vol = volume × buyFraction, Sell vol = volume × (1-buyFraction)
-- Delta = buy - sell (positive = buyers dominated)
-- Cumulative delta used to detect divergence with price
+- Delta = buy - sell volume estimate (positive = buyers dominated)
 
-### 2.12 Volume-Weighted BVIX Proxy
+### 2.12 VWAP
 ```
-calcBVIXProxy(candles, period=14)
+calcVWAP(candles)
 ```
-- `BVIX = ATR / price × 100`
-- Measures volatility as a % of price
-- Shown in microstructure panel as a volatility warning gauge
+- Cumulative (volume × typical price) / cumulative volume
+- Used as key level for ghost candle pinbar injection
+
+### 2.13 Ichimoku Cloud
+```
+calcIchimoku(highs, lows, closes)
+```
+- Tenkan-sen (9), Kijun-sen (26), Senkou Span A & B, Chikou
+- Senkou A & B used as key levels in ghost candle system
+
+### 2.14 ADX (Average Directional Index)
+```
+calcADX(highs, lows, closes, period=14)
+```
+- Returns: `{adx, plusDI, minusDI}` arrays
+- ADX > 25 → strong trend; used to select ghost candle structure sequence
 
 ---
 
@@ -175,8 +186,7 @@ calcBVIXProxy(candles, period=14)
 ```
 detectSwings(highs, lows, lookback=5)
 ```
-- A bar is a swing high if it's higher than 5 bars on each side
-- A bar is a swing low if it's lower than 5 bars on each side
+- A bar is a swing high if higher than 5 bars on each side
 - Keeps last 5 swings in each direction
 - Used for: BOS detection, liquidity level mapping, BSL/SSL
 
@@ -184,10 +194,9 @@ detectSwings(highs, lows, lookback=5)
 ```
 detectFVG(candles)
 ```
-- Bullish FVG: `candle[i].low > candle[i-2].high` (gap up, unfilled)
-- Bearish FVG: `candle[i].high < candle[i-2].low` (gap down, unfilled)
+- Bullish FVG: `candle[i].low > candle[i-2].high`
+- Bearish FVG: `candle[i].high < candle[i-2].low`
 - Marks imbalances where price typically returns to fill
-- Shown on chart as horizontal bands
 
 ### 3.3 Break of Structure (BOS)
 ```
@@ -195,80 +204,60 @@ detectBOS(candles, swings)
 ```
 - Bullish BOS: close crosses above a recent swing high
 - Bearish BOS: close crosses below a recent swing low
-- Confirms trend direction change — high-weight signal
 
 ### 3.4 Liquidity Map
 ```
 calcLiquidityMap(candles)
 ```
-- BSL (Buy-Side Liquidity): above swing highs — where stop-losses of shorts rest
-- SSL (Sell-Side Liquidity): below swing lows — where stop-losses of longs rest
-- Liquidity grabs: spike beyond a level that immediately reverses (stop hunt)
-- Used for entry/exit zone refinement
+- BSL (Buy-Side Liquidity): above swing highs — stop-losses of shorts
+- SSL (Sell-Side Liquidity): below swing lows — stop-losses of longs
+- Liquidity grabs: spike beyond level + immediate reversal
 
 ### 3.5 Absorption Zones
 ```
 detectAbsorption(candles, atr)
 ```
-- High volume + small range candle (>2× avg vol, range < 0.5×ATR)
-- Indicates smart money absorbing supply/demand
-- Adds +5 to microstructure score when detected
+- High volume (>2× avg) + small range candle (<0.5×ATR) = smart money absorbing
 
 ---
 
-## 4. The 8 Scoring Engines
+## 4. The 12 Analysis Modules
 
-Each engine outputs a score (-100 to +100) and detailed signals. All feed the Master Bias Score.
+Each module outputs a score (-100 to +100), a weight, and an accuracy tracker. All feed the Master Bias Score via `calcMasterBias`. Module accuracy is tracked live (`_modAccStats[name]`) and displayed in the AI Supervisor panel.
 
-### Engine 1 — SMC/EMA Structure (weight 20%)
-- Based on EMA alignment: price vs EMA9/21/50
-- Bull%: price>EMA9 (+25), price>EMA21 (+20), price>EMA50 (+15), RSI>50 (+20), BOS bull (+20), VP context (+5)
-- Raw: `(bull_pct - 50) × 2` → range -100 to +100
+| # | Module | Weight | Description |
+|---|--------|--------|-------------|
+| 1 | **SMC/EMA Structure** | 20% | EMA alignment, BOS, VP context |
+| 2 | **Wyckoff Phase** | 10% | Accumulation/Markup/Distribution/Markdown |
+| 3 | **Volume Profile** | 10% | Multi-TF VP POC position (1w/1d/4h/1h blend) |
+| 4 | **OI/Funding** | 10% | Binance FAPI funding rate → overcrowding signal |
+| 5 | **Momentum** | 10% | RSI, MACD, StochRSI, CMF combined |
+| 6 | **Microstructure** | 10% | Volume delta, cumulative delta divergence, absorption |
+| 7 | **Sentiment** | 5% | Fear & Greed Index + news sentiment ratio |
+| 8 | **Intermarket** | 5% | DXY, SPX, Gold, BTC dominance |
+| 9 | **L/S Ratio** | 5% | Long/Short ratio from Binance → crowd positioning |
+| 10 | **RS vs BTC** | 5% | Relative strength of coin vs BTC (outperformance) |
+| 11 | **Previous Day H/L** | 5% | PDH/PDL sweeps → liquidity grabs + reversal signals |
+| 12 | **HTF Bias** | 5% | Higher timeframe macro trend alignment |
 
-### Engine 2 — Wyckoff Phase (weight 10%)
-- Phases: **Accumulation** (+15), **Markup** (+30), **Distribution** (-15), **Markdown** (-30)
-- Phase detection:
-  - Markup: bullBias AND RSI>55
-  - Distribution: price>EMA50 AND RSI>60
-  - Markdown: bearBias AND RSI<45
-  - Default: Accumulation
+### Module Accuracy Tracking
+```javascript
+_modAccStats[moduleName] = { correct: N, total: N }
+// Accuracy = correct/total (minimum 10 predictions required to count)
+// DeepSeek context shows live accuracy for each module
+// Modules with <10 predictions flagged as "insufficient data"
+```
 
-### Engine 3 — Volume Profile (weight 10%)
-- Multi-timeframe VP: 1w(40%), 1d(30%), 4h(20%), 1h(10%)
-- Price above POC → bullish contribution weighted by timeframe
-- Price below POC → half-weight bearish penalty
-
-### Engine 4 — Momentum Score (weight 10%)
-- Combines: RSI14, MACD(12/26/9), StochRSI(14/3/3), CMF(20), BB Squeeze
-- Each sub-indicator scores individually and sums
-- BB Squeeze state reported separately (expansion imminent)
-
-### Engine 5 — Microstructure Score (weight 10%)
-- Volume delta dominance: buy-dominant +20, sell-dominant -20
-- Cumulative delta divergence: ±15
-- Absorption zones: +5
-- BVIX (volatility index): displayed, not scored
-
-### Engine 6 — OI/Funding Score (weight 10%)
-- Only for crypto perpetual futures (Binance FAPI)
-- Funding rate signals:
-  - >0.001 (1/10 of 1%) → overleveraged longs → bearish -20
-  - <-0.001 → overleveraged shorts → bullish +20
-  - 0.0003 to 0.001 → slight long bias → mild bearish -10
-  - -0.001 to -0.0003 → slight short bias → mild bullish +10
-
-### Engine 7 — Sentiment Score (weight 5%)
-- Fear & Greed Index (alternative.me API):
-  - ≤25 (Extreme Fear) → bullish +20
-  - ≥75 (Extreme Greed) → bearish -20
-- News sentiment (bullish count vs bearish count): ±10
-
-### Engine 8 — Intermarket Score (weight 5%)
-- DXY (US Dollar Index): DXY up → crypto/risk assets down
-- SPX (S&P 500): SPX up → risk-on bullish signal
-- Gold: tracked but not scored directly
-- BTC dominance: tracked (from CoinGecko)
-- Weights differ for crypto vs stocks
+### Module Descriptions (`_MOD_DESC`)
+Each module has a plain-English description sent to DeepSeek so it understands the signal:
+```javascript
+_MOD_DESC = {
+  'SMC/Structure': 'EMA alignment + BOS + VP context: are EMAs stacked bullish, has structure broken higher?',
+  'Wyckoff':       'Market phase (Accumulation/Markup/Distribution/Markdown)',
+  'VolumeProfile': 'Price vs POC/VAH/VAL across 4 timeframes...',
+  // ... all 12 modules
+}
+```
 
 ---
 
@@ -278,20 +267,24 @@ Each engine outputs a score (-100 to +100) and detailed signals. All feed the Ma
 calcMasterBias(setup, momSig, microSig, oiSig, imSig, sentSig, mtfVP, price)
 ```
 
-**Weighted blend:**
-| Engine           | Weight |
-|------------------|--------|
-| SMC/Structure    | 20%    |
-| Wyckoff Phase    | 10%    |
-| Volume Profile   | 10%    |
-| OI/Funding       | 10%    |
-| Momentum         | 10%    |
-| Microstructure   | 10%    |
-| Sentiment        | 5%     |
-| Intermarket      | 5%     |
-| ML Boost         | +10% of weighted sum |
+**Weighted blend of all 12 modules:**
 
-**Output:** Score -100 to +100  
+| Module | Weight |
+|--------|--------|
+| SMC/Structure | 20% |
+| Wyckoff | 10% |
+| Volume Profile | 10% |
+| OI/Funding | 10% |
+| Momentum | 10% |
+| Microstructure | 10% |
+| L/S Ratio | 5% |
+| RS vs BTC | 5% |
+| Previous Day H/L | 5% |
+| HTF Bias | 5% |
+| Sentiment | 5% |
+| Intermarket | 5% |
+
+**Output:** Score -100 to +100
 - > +60 → **Strong Bullish** (teal)
 - > +30 → **Bullish**
 - -30 to +30 → **Neutral** (gray)
@@ -300,11 +293,14 @@ calcMasterBias(setup, momSig, microSig, oiSig, imSig, sentSig, mtfVP, price)
 
 **Signal thresholds:** Score ≥ +8 → LONG, Score ≤ -8 → SHORT, else NEUTRAL
 
-### Signal Stability (EMA + Hold Lock)
-1. **EMA Smoothing**: `biasEMA = biasEMA×0.65 + newScore×0.35`  
-   Prevents single-candle ticks from flipping the signal
-2. **Hold Lock**: Signal only flips after **2 consecutive readings** in the new direction  
-   Prevents false flips from temporary 30-second poll noise
+### Adaptive Weight System
+Module weights adjust based on live prediction accuracy:
+```javascript
+// Modules with >65% live accuracy get up to 1.4× weight boost
+// Modules with <45% accuracy get up to 0.6× weight penalty
+adaptedWeights[m] = baseWeight * (accuracyFactor)
+// Normalised back to sum=100% after adjustment
+```
 
 ---
 
@@ -313,7 +309,7 @@ calcMasterBias(setup, momSig, microSig, oiSig, imSig, sentSig, mtfVP, price)
 ### Architecture
 ```
 Input Layer:  96 neurons  (12 features × 8 candles)
-Hidden Layer: 64 neurons  (sigmoid activation)
+Hidden Layer: 64 neurons  (sigmoid activation, Xavier init)
 Hidden Layer: 32 neurons  (sigmoid activation)
 Output Layer:  3 neurons  (sigmoid activation)
   → Output[0]: direction probability (0=bearish, 1=bullish)
@@ -325,33 +321,34 @@ Output Layer:  3 neurons  (sigmoid activation)
 | # | Feature | Range | Source |
 |---|---------|-------|--------|
 | 1 | RSI(14) | 0-1 | TA Engine |
-| 2 | MACD histogram / ATR (normalized) | 0-1 | TA Engine |
-| 3 | Bollinger Band position (where in band) | 0-1 | TA Engine |
+| 2 | MACD histogram / ATR normalized | 0-1 | TA Engine |
+| 3 | Bollinger Band position | 0-1 | TA Engine |
 | 4 | StochRSI K | 0-1 | TA Engine |
-| 5 | Volume ratio (vs 20-bar average, capped 3×) | 0-1 | TA Engine |
-| 6 | Body direction (0=bear, 1=bull) | 0 or 1 | Candle |
+| 5 | Volume ratio vs 20-bar avg (capped 3×) | 0-1 | TA Engine |
+| 6 | Body direction | 0 or 1 | Candle |
 | 7 | Body fraction (body/range) | 0-1 | Candle |
 | 8 | Price vs EMA9 | 0 or 1 | TA Engine |
 | 9 | Price vs EMA21 | 0 or 1 | TA Engine |
 | 10 | Price vs EMA50 | 0 or 1 | TA Engine |
-| 11 | 5-bar slope (normalized ÷ ATR) | 0-1 | TA Engine |
-| 12 | CMF (money flow, normalized) | 0-1 | TA Engine |
+| 11 | 5-bar slope normalized ÷ ATR | 0-1 | TA Engine |
+| 12 | CMF (money flow normalized) | 0-1 | TA Engine |
 
 **Sequence window:** Last 8 candles → flattened 96-element input vector
 
 ### Training Process
-- **Full training:** 20 epochs, LR=0.02, on entire candle history
+- **Full training:** 20 epochs, LR=0.02, on entire candle history + pool
 - **Guard:** Skip if candle count hasn't grown by ≥2 since last training
-- **Error-correction samples:** Weighted 5× (wrong predictions retrained harder)
-- **Immediate self-correction:** 8 epochs, LR=0.03, triggered when validation finds wrong prediction
+- **Wrong-direction samples:** Weighted 5× (higher LR focus)
+- **Wrong-size samples:** Weighted 3× (size correction)
+- **Immediate self-correction:** 8 epochs, LR=0.03, triggered on validation miss
 
 ### Self-Correction Flow
 ```
 Predict → log {input, prediction, anchorPrice, anchorTime} → wait for next candle
-→ Validate: compare predicted direction vs actual candle direction
-→ If WRONG: weight=5 retrain (8 epochs, LR=0.03) immediately
-→ _nnStats.corrections++ for tracking
-→ Wrong samples also included in next full training run
+→ Validate: predicted direction vs actual candle direction
+→ If WRONG direction: weight=5 retrain immediately (8 epochs)
+→ If WRONG size (magErr > 60% or volErr > 60%): weight=3 retrain
+→ _nnStats.corrections++ and _nnStats.sizeCorrections++ for tracking
 ```
 
 ### Prediction Output
@@ -364,15 +361,10 @@ Predict → log {input, prediction, anchorPrice, anchorTime} → wait for next c
   confidence: 44,      // |prob - 0.5| × 200
   accuracy: 67,        // training accuracy %
   recentAcc: 71,       // rolling-50 live validation accuracy
-  corrections: 23,     // total self-corrections applied
-  immediateRetrains: 8 // times immediate retraining triggered
+  corrections: 23,     // total direction self-corrections
+  sizeCorrections: 8,  // total size self-corrections
 }
 ```
-
-### Accuracy Tracking
-- **Training accuracy:** batch accuracy at training time (smoothed: 60% old, 40% new)
-- **Live accuracy (recentAcc):** rolling window of last 50 validated predictions vs actual outcome (ground truth)
-- **Session count:** how many chart loads triggered a training run
 
 ### Storage Keys (localStorage)
 | Key | Contents |
@@ -381,69 +373,210 @@ Predict → log {input, prediction, anchorPrice, anchorTime} → wait for next c
 | `smc_deep_stats_v7` | Training stats, accuracy, session count |
 | `smc_deep_outcomes_v7` | Pending predictions awaiting validation |
 | `smc_deep_news_v7` | News→price reaction memory |
+| `smc_nn_pool_v1` | Cross-TF training pool (max 3000 examples) |
+| `smc_mod_acc_v1` | Per-module accuracy stats (all 12 modules) |
 
 ---
 
-## 7. Ghost Candle Prediction System
+## 7. Cross-TF Training Pool & Multi-Window Sync
 
-Ghost candles are semi-transparent future candle predictions displayed on the chart after the live candle.
+### Cross-TF Training Pool
+Every timeframe you open contributes examples to a **shared pool** (`smc_nn_pool_v1`, max 3000 entries). This means:
+- Opening BTC/1h trains on 1h patterns
+- Then opening BTC/4h adds 4h patterns to the same model
+- Opening ETH/1h adds ETH patterns too
+- The NN learns from ALL timeframes and ALL coins simultaneously
 
-### How It Works
-
-**Step 1 — NN Inference:**
-- Runs NN on current candle sequence
-- Gets `nnProb` (direction), `nnMag` (move size), `nnVol` (volatility)
-- Falls back to technical signal direction if NN not trained enough (<150 candles)
-
-**Step 2 — Candle Sizing (realistic floor):**
 ```javascript
-const avgBody = last20 candles avg |close-open|
-const avgRange = last20 candles avg (high-low)
-const baseBody = Math.max(avgBody × 0.70, nnMag × 2 × ATR)
-const baseRange = Math.max(avgRange × 0.60, nnVol × 3 × ATR)
+const _NN_POOL_KEY = 'smc_nn_pool_v1';
+const _NN_POOL_MAX = 3000;
+
+// On each TF load: sample up to 600 examples, append to pool
+const sampleStep = Math.max(1, Math.floor(freshData.length / 600));
+const sampledFresh = freshData.filter((_, i) => i % sampleStep === 0);
+let pool = _loadPool();
+pool.push(...sampledFresh);
+if (pool.length > _NN_POOL_MAX) pool = pool.slice(pool.length - _NN_POOL_MAX);
+_savePool(pool);
+// Training uses: [...pool, ...freshData] (pool gives generalization, fresh gives recency)
 ```
-> Ghost candles are always at least 70% of recent actual candle body size — prevents tiny unreadable ghosts when NN is early in training.
 
-**Step 3 — Structure Sequence Selection:**
-| NN Confidence | Pattern Sequence |
-|---------------|-----------------|
-| >35% | Impulse → Continuation → Continuation → Pullback (repeat) |
-| 15-35% | Impulse → Inside → Inside → Breakout (repeat) |
-| <15% | Range → Inside → Range → Inside (market indecisive) |
+### Multi-Window BroadcastChannel Sync
+```javascript
+const _nnChannel = new BroadcastChannel('smc_nn_sync');
+const _WIN_REGISTRY_KEY = 'smc_win_reg_v1';
+const _WINDOW_ID = Math.random().toString(36).slice(2); // unique per tab
+```
 
-**Step 4 — Candle Type OHLC Construction:**
-| Pattern | Body Size | Wick Behavior |
-|---------|-----------|---------------|
-| Impulse | 55-100% of base (NN confidence scales) | Small counter-wicks |
-| Continuation | 55% of base | Small counter-wicks |
-| Pullback | 38% of base (Fibonacci retracement) | Equal wicks |
-| Inside | 18% of base | Large equal wicks |
-| Breakout | 88% of base | Minimal wicks |
-| Pinbar | 7% of base | 72% wick in rejection direction |
-| Range | 22% of base | 22% equal wicks |
+When any window completes training:
+1. Broadcasts `{type: 'nn_trained', weights, stats}` on `smc_nn_sync`
+2. All other open windows receive it and immediately update `_nnInst` with new weights
+3. Ghost candles in ALL tabs instantly improve after any one tab trains
 
-**Step 5 — Special Rules:**
-- **RSI Dampening:** RSI>78 or <22 → multiply body sizes by 0.5 (exhaustion → smaller candles)
-- **BB Dampening:** Price at/beyond BB band → multiply by 0.35 (mean-reversion expected)
-- **Pinbar Injection:** Near POC/VAH/VAL/BB bands → replace impulse/continuation with pinbar
-- **Decay:** Each successive ghost candle shrinks: `decay = max(0.22, 1 - i×0.045)`
+**Fallback for Safari/Firefox (no BroadcastChannel):**
+```javascript
+window.addEventListener('storage', e => {
+  if (e.key === 'smc_nn_sync_fb') {
+    const msg = JSON.parse(e.newValue);
+    if (msg.type === 'nn_trained') _getNN().fromJSON(msg.weights);
+  }
+});
+```
 
-**Color Coding:**
-| Pattern | Color | Meaning |
-|---------|-------|---------|
-| Impulse | Yellow (#FFD700) | Strong directional move |
-| Continuation | Yellow | Same direction as impulse |
-| Pullback | Orange (#FF9800) | Counter-trend retracement |
-| Inside | Gray (#787b86) | Consolidation/indecision |
-| Breakout | Blue (#2962FF) | Breakout after consolidation |
-| Pinbar | Purple (#AB47BC) | Rejection at key level |
-| Range | Gray | Sideways movement |
-
-**Markers:** Small shape-only dots (size=0.5) below/above ghost candles — no text labels to avoid covering candle bodies.
+### Window Registry
+Each tab registers itself with `{symbol, tf, lastSeen}` in localStorage. The registry is used to:
+- Know which symbol/TF combos are actively being watched
+- Coordinate background validation (avoid duplicate work)
 
 ---
 
-## 8. Volume Profile (VP) Engine
+## 8. Next-Candle Auto-Validation System
+
+### Problem Solved
+When you have a ghost candle prediction for BTC/1h at 09:00, the app automatically knows when the next 1h candle closes (10:00) and validates whether the prediction was right.
+
+### Timing Map
+```javascript
+const _TF_MS = {
+  '1m':60000, '3m':180000, '5m':300000, '15m':900000, '30m':1800000,
+  '1h':3600000, '2h':7200000, '4h':14400000, '6h':21600000,
+  '8h':28800000, '12h':43200000, '1d':86400000, '3d':259200000,
+  '1w':604800000
+};
+```
+
+### Scheduler
+```javascript
+function scheduleNextCandleValidation(symbol, tf, candles) {
+  const tfMs = _TF_MS[tf] || 0;
+  const lastTs = candles[candles.length - 1].timestamp;
+  const nextCandleAt = lastTs + tfMs;
+  const waitMs = nextCandleAt - Date.now() + 4000; // +4s for candle to close fully
+  if (waitMs > 0 && waitMs < 7 * 24 * 3600 * 1000) {
+    _nextCandleTimers[key] = setTimeout(() => _validateAndReschedule(symbol, tf), waitMs);
+  }
+}
+```
+
+After each validation:
+1. Fetches fresh candles
+2. Validates all pending predictions for this symbol/TF
+3. Retrains if any were wrong
+4. **Reschedules** the next timer automatically → continuous forever
+
+### Size Accuracy Validation
+Beyond direction, the app tracks **candle size accuracy**:
+```javascript
+const magErr = Math.abs(predMag - actualMag) / (actualMag || 0.05);
+const volErr = Math.abs(predVol - actualVol) / (actualVol || 0.05);
+const sizeWrong = magErr > 0.60 || volErr > 0.60; // >60% size error = wrong
+if (wrongDirection) weight = 5;   // direction wrong: highest penalty
+else if (sizeWrong)  weight = 3;  // size wrong: medium penalty
+```
+`_nnStats.sizeCorrections` tracks how many times the NN has been corrected for size prediction errors.
+
+### Page Visibility Resume
+```javascript
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    // Tab just became visible — immediately validate any missed candles
+    _validateAndReschedule(symbol, tf);
+  }
+});
+```
+Catches cases where the laptop was closed/screen locked during a candle close.
+
+---
+
+## 9. Ghost Candle Prediction System
+
+Ghost candles are semi-transparent future candle predictions displayed after the live candle. The **AI Supervisor has full control** — ghost candles are always regenerated with complete Supervisor context.
+
+### Context Object (`ctx2`)
+Every `futureCandlesSim` call receives the full Supervisor context:
+```javascript
+ctx2 = {
+  // TA indicators (freshly computed)
+  momScore, microScore, vpData, macd, squeeze, rsiVal,
+  bbData, cmf, stoch, adxVal, biasScore,
+  lsLongPct, fundingRate,
+  keyLevels: [ema200, vwap, ichiA, ichiB, pdh, pdl],
+  // Pre-computed Supervisor NN outputs
+  nnProb, nnMag, nnVol,
+  aiConf, aiOverride,
+  features,              // all 12 modules with scores, weights, accuracy
+  accWeightedConviction, // accuracy-weighted total conviction
+  // Hybrid AI fields (when DeepSeek has analyzed)
+  hybridActive, hybridAgree, hybridConflict,
+}
+```
+
+When `hybridBias` is available (DeepSeek has analyzed), `_activeBias = hybridBias` replaces `aiAdjustedBias` as the authority — ghost candle direction, size, and structure all reflect the combined verdict.
+
+### Step 1 — Module Agreement Analysis
+```javascript
+// Each module votes on direction, weighted by live accuracy
+agreeW += (module.weight × accuracy) for modules aligned with primary direction
+disagreW += ... for opposing modules
+agreementRatio = agreeW / (agreeW + disagreeW)  // 0=all disagree, 1=all agree
+
+// Effective confidence: blend Supervisor mlConf with module agreement
+effectiveConf = (supAiConf × 0.6) + (agreementRatio × 0.4)
+// Accuracy-weighted conviction (normalized 0-1)
+accConviction = |accWeightedConviction| / 30
+```
+
+### Step 2 — Body Size Multipliers
+```javascript
+rsiDamp      = RSI > 78 → 0.50 | RSI < 22 → 0.50 | extreme = dampen
+biasMult     = max(0.65, min(1.6, 1.0 + accConviction × 0.8))   // accuracy-weighted
+confMult     = max(0.70, min(1.4, 0.70 + effectiveConf × 0.70)) // consensus clarity
+momMult      = max(0.65, min(1.4, 1.0 + (momScore × dir) / 200))
+crowdMult    = crowdContra ? 1.25 : 1.0                           // contra-crowd boost
+overridePenalty = supAiOverride ? 0.80 : 1.0                     // NN/indicator conflict
+// NEW: Hybrid AI multipliers
+hybridBoost  = hybridActive && hybridAgree    ? 1.12 : 1.0  // both AIs agree: +12% body
+hybridDamp   = hybridActive && hybridConflict ? 0.72 : 1.0  // AIs split: -28% body, more wicks
+
+baseBody  = max(avgBody×0.70, nnMag×2×atr) × biasMult × confMult × momMult × crowdMult × overridePenalty × hybridBoost × hybridDamp
+baseRange = max(avgRange×0.60, nnVol×3×atr) × (aiOverride?1.3:1.0) × (hybridConflict?1.25:1.0)
+```
+
+### Step 3 — Structure Sequence Selection
+| Condition | Pattern | Meaning |
+|-----------|---------|---------|
+| `hybridConflict` | deep range | DeepSeek and Supervisor disagree → uncertainty |
+| `hybridAgree && effectiveConf > 0.45` | bold impulse | Both AIs agree → front-load impulse |
+| BB squeeze active | coil → breakout | Squeeze release |
+| `supAiOverride && agreementRatio < 0.55` | H&S ranging | NN/indicator internal conflict |
+| `adxVal > 25 && agreementRatio > 0.60` | Elliott 5-wave | Strong trend consensus |
+| `adxVal > 15` | impulse-consolidation | Moderate trend |
+| Default | ranging | Low conviction |
+
+### Step 4 — OHLC Construction Per Type
+| Pattern | Body Size | Wick Behavior | Color |
+|---------|-----------|---------------|-------|
+| Impulse | 55-100% (NN confidence scales) | Small counter-wicks | Yellow |
+| Continuation | 55% | Small counter-wicks | Yellow |
+| Pullback | 38% (Fib retracement) | Equal wicks | Orange |
+| Inside | 18% | Large equal wicks | Gray |
+| Breakout | 88% | Minimal wicks | Blue |
+| Pinbar | 7% body | 72% wick in rejection dir | Purple |
+| Range | 22% | 22% equal wicks | Gray |
+
+### Step 5 — Key Level Pinbar Injection
+```javascript
+// Key levels include: EMA200, VWAP, Ichimoku A&B, PDH, PDL, VP POC/VAH/VAL, BB bands
+// If ghost candle would hit within 0.4×ATR of a key level → replace with pinbar
+// Pullback depth: agreementRatio > 0.70 → shallow (0.24 Fib), aiOverride → deep (0.62)
+```
+
+### Step 6 — Decay
+Each successive ghost candle shrinks: `decay = max(0.22, 1 - i × 0.045)`
+
+---
+
+## 10. Volume Profile (VP) Engine
 
 ```
 calcVolumeProfile(candles, numBuckets=100)
@@ -452,36 +585,32 @@ calcVolumeProfile(candles, numBuckets=100)
 ### How It's Built
 1. Find price range (min-max) across all candles
 2. Divide into 100 equal price buckets
-3. For each candle, distribute volume proportionally across overlapping buckets
-4. Find the highest-volume bucket → **POC** (Point of Control)
-5. Expand outward from POC until 70% of total volume is covered → **Value Area** (VAH/VAL)
-6. Mark buckets >2× average volume → **HVN** (High Volume Nodes, strong support/resistance)
-7. Mark buckets <0.3× average volume → **LVN** (Low Volume Nodes, price moves fast through these)
+3. For each candle, distribute volume across overlapping buckets proportionally
+4. Highest volume bucket → **POC** (Point of Control)
+5. Expand from POC until 70% of total volume covered → **VAH/VAL** (Value Area)
+6. Buckets >2× average → **HVN** | Buckets <0.3× average → **LVN**
 
 ### Key Levels
 | Level | Description | Trading Use |
 |-------|-------------|-------------|
-| **POC** | Price of Control — highest traded volume | Strong magnet, expect price to test |
+| **POC** | Price of Control — highest traded volume | Strong magnet |
 | **VAH** | Value Area High — top of 70% volume zone | Resistance above value area |
 | **VAL** | Value Area Low — bottom of 70% volume zone | Support below value area |
 | **HVN** | High Volume Node | Price stalls here (congestion) |
-| **LVN** | Low Volume Node | Price moves quickly (gap) |
+| **LVN** | Low Volume Node | Price moves quickly through |
 
 ### Canvas Rendering
-- Drawn on an HTML5 Canvas overlay positioned exactly on top of the chart
-- **Colors:** POC=red line, VAH/VAL=teal lines, In-VA bars=teal fill, Out-VA bars=gray fill
-- **VP drift fix:** Canvas redrawn on every chart viewport change:
-  - `subscribeVisibleLogicalRangeChange` (pan/zoom)
-  - `wheel` event (mouse scroll)
-  - `mouseup` / `touchend` events (drag release)
-- `priceToCoordinate()` is called fresh on each redraw to get correct pixel position
+- HTML5 Canvas overlay positioned exactly on chart (right 15% of chart width)
+- Redrawn on every viewport change: `subscribeVisibleLogicalRangeChange`, `wheel`, `mouseup`, `touchend`
+- `priceToCoordinate()` called fresh on each redraw
 
-### Multi-Timeframe VP
-Computed independently for 1w, 1d, 4h, 1h timeframes. Each TF's POC feeds the Master Bias VP score at weighted contribution (1w=40%, 1d=30%, 4h=20%, 1h=10%).
+### Multi-TF VP
+Computed for 1w, 1d, 4h, 1h. Each TF's POC feeds the Master Bias VP score:
+- 1w=40%, 1d=30%, 4h=20%, 1h=10%
 
 ---
 
-## 9. News Intelligence System
+## 11. News Intelligence System
 
 ### RSS Feed Sources (11 feeds)
 - Yahoo Finance (markets + crypto)
@@ -490,638 +619,824 @@ Computed independently for 1w, 1d, 4h, 1h timeframes. Each TF's POC feeds the Ma
 - Google News (Fed/FOMC, geopolitical, crypto, markets, macro/CPI)
 
 ### Processing Pipeline
-1. **Fetch:** All feeds in parallel via 3 CORS proxies (fallback chain)
-2. **Parse:** DOMParser extracts `<item>` elements (title, link, pubDate)
-3. **Score:** Keyword matching for bullish/bearish sentiment and impact level
-4. **Categorize:** Into 8 categories (FED/RATES, WAR/GEO, CRYPTO REG, etc.)
-5. **Deduplicate:** By first 65 chars of headline
-6. **Sort:** By timestamp (newest first)
-7. **Display:** In News tab with color-coded categories and sentiment badges
-
-### Keyword Sets
-**Bullish keywords:** rate cut, fed cut, pivot, dovish, stimulus, rally, surge, upgrade, ceasefire, recovery, beats, approves bitcoin, trade deal, soft landing
-
-**Bearish keywords:** rate hike, hawkish, recession, war, attack, invasion, airstrike, crash, plunge, ban, default, stagflation, crackdown, layoffs, sanctions, nuclear, collapse, tariff
-
-**High-impact multiplier (2×):** war, invasion, attack, rate cut, rate hike, crash, recession, ceasefire, default, nuclear
+1. Fetch all feeds in parallel via 3 CORS proxies (allorigins.win → corsproxy.io → codetabs.com)
+2. Parse with DOMParser → extract title, link, pubDate
+3. Score with bullish/bearish keyword matching
+4. Deduplicate by first 65 chars of headline
+5. Log HIGH-impact + directional news to NN memory
 
 ### Impact Levels
-| Impact Score | Label | NN Training? |
-|-------------|-------|-------------|
-| ≥3 | HIGH | ✅ Logged to NN memory |
-| 1.5-3 | MEDIUM | ❌ Skipped |
-| <1.5 | LOW | ❌ Skipped |
-
-> Only HIGH-impact + directional (bullish/bearish, not neutral) news gets logged to the NN's news memory. This prevents noise from polluting the model.
+| Impact | Label | NN Memory? |
+|--------|-------|-----------|
+| ≥3 | HIGH | ✅ Logged |
+| 1.5-3 | MEDIUM | ❌ |
+| <1.5 | LOW | ❌ |
 
 ### News Reaction Memory
-- On HIGH-impact news arrival: log feature snapshot (`_buildSequenceInput`) + news metadata
-- After 5 candles: validate — compare price at news vs price 5 candles later
-- Record actual price reaction % for each high-impact news event
-- Stored in `smc_deep_news_v7` (localStorage) + `news_reactions.json` (disk)
+- On HIGH-impact arrival: log feature snapshot + news metadata
+- After 5 candles: validate price reaction vs predicted direction
+- Stored in `smc_deep_news_v7` + `news_reactions.json` (disk)
 
 ---
 
-## 10. Signal Stability System
+## 12. Signal Stability System
 
-**Problem solved:** On a 30-second poll, a small price tick could shift RSI by 0.1 and tip the master bias from LONG to SHORT, then back on the next poll. This made the signal unusable for real trading.
-
-### Layer 1 — EMA Smoothing on Master Bias
+### Layer 1 — EMA Smoothing
 ```javascript
 biasEMA = Math.round(biasEMA × 0.65 + newScore × 0.35)
 ```
-- New readings only have 35% influence
-- History (previous EMA) has 65% influence
-- Smooths micro-fluctuations from 30s polls
+New readings only have 35% influence — smooths micro-fluctuations from 30s polls.
 
-### Layer 2 — Signal Hold Lock
+### Layer 2 — Hold Lock
 ```javascript
 if (newSignal !== currentSignal) {
-  holdCount++
-  if (holdCount < 2 && currentSignal !== null) {
-    return currentSignal  // hold — don't flip yet
-  }
+  holdCount++;
+  if (holdCount < 2 && currentSignal !== null) return currentSignal; // hold
 }
-// Only flip after 2 consecutive readings in new direction
+// Flips only after 2 consecutive readings in new direction
 ```
-- Signal only changes if 2 polls in a row agree on the new direction
-- Prevents one-off spikes from changing your trade direction
 
 ### Result
-- Signal is stable for 15+ minutes under normal volatility
-- Only flips when market has genuinely changed direction (sustained)
+Signal is stable for 15+ minutes under normal volatility. Only changes when the market has genuinely shifted.
 
 ---
 
-## 11. AI Supervisor Override
-
-### How It Works
-The Neural Network's prediction **blends into** the Master Bias Score. The higher the NN's live accuracy, the more weight it gets.
+## 13. AI Supervisor Override (aiAdjustedBias)
 
 ```javascript
-const maxWeight = liveAcc >= 65 ? 0.55 : liveAcc >= 60 ? 0.48 : 0.40
-const nnWeight = Math.min(maxWeight,
-  Math.max(0.05, nnConf × 0.6 + Math.max(0, (liveAcc-50)/80))
-)
-// aiAdjustedBias = masterBias × (1-nnWeight) + nnDirectional × nnWeight
+const aiAdjustedBias = useMemo(() => {
+  if (!masterBias) return null;
+  if (!nnResult || nnResult.totalCandles < 150)
+    return { ...masterBias, aiWeight: 0, aiOverride: false };
+
+  const nnProb = nnResult.prob ?? 0.5;
+  const nnBull = nnProb >= 0.58, nnBear = nnProb <= 0.42;
+  const liveAcc = nnResult.recentAcc ?? 50;
+  const nnConf = Math.abs(nnProb - 0.5) * 2;  // 0-1 directional confidence
+  const maxWeight = liveAcc >= 65 ? 0.55 : liveAcc >= 60 ? 0.48 : 0.40;
+  const nnWeight = Math.min(maxWeight, Math.max(0.05, nnConf * 0.6 + Math.max(0, (liveAcc-50)/80)));
+  const nnContrib = Math.round((nnBull?60:nnBear?-60:0) * nnWeight);
+  const aiScore = Math.max(-100, Math.min(100, Math.round(masterBias.score * (1-nnWeight)) + nnContrib));
+  // ...
+}, [masterBias, nnResult]);
 ```
 
-| Live Accuracy | Max NN Weight | Meaning |
-|---------------|--------------|---------|
-| ≥ 65% | 55% | NN dominates the signal |
-| ≥ 60% | 48% | NN has strong influence |
-| < 60% | 40% | NN has moderate influence |
-| < 50 candles | 5% | NN barely matters (not trained) |
+| Live Accuracy | Max NN Weight |
+|---------------|--------------|
+| ≥ 65% | 55% |
+| ≥ 60% | 48% |
+| < 60% | 40% |
+| < 150 candles | 5% (essentially inactive) |
 
-### Status Badges on Signal Button
-- **"⚠️ NN flipped signal"** — NN disagreed with raw Master Bias and changed the final signal
-- **"✓ NN confirms"** — NN agrees with the direction from the 8 engines
+### Status Badges
+- **"⚠️ NN flipped signal"** — NN changed the final signal vs raw indicators
+- **"✓ NN confirms"** — NN agrees with indicator consensus
 - **"🧠 X% NN weight"** — shows current blend percentage
 
-### Confidence-Weighted Direction
+---
+
+## 14. DeepSeek-R1 Integration (Local Ollama)
+
+### Overview
+DeepSeek-R1:8b runs **entirely on your local machine** via Ollama. No API key. No cloud. No cost. Fully private.
+
+### `callOllamaJSON` (Global Helper)
+```javascript
+async function callOllamaJSON(systemPrompt, userMsg, maxTokens = 400) {
+  const url = (localStorage.getItem('smc_ollama_url') || 'http://localhost:11434') + '/api/chat';
+  const model = localStorage.getItem('smc_ollama_model') || 'deepseek-r1:8b';
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      model, stream: false,
+      messages: [{role:'system',content:systemPrompt},{role:'user',content:userMsg}],
+      options: {num_predict: maxTokens, temperature: 0.2}  // low temp for reliable JSON
+    })
+  });
+  const d = await resp.json();
+  // Ollama v0.7+ puts DeepSeek reasoning in message.thinking (NOT in content)
+  const raw = (d?.message?.content || d?.message?.thinking || '').trim();
+  const m = raw.match(/\{[\s\S]*\}/);  // extract first JSON object
+  if (!m) throw new Error('No JSON in DeepSeek response');
+  return JSON.parse(m[0]);
+}
 ```
-nnDirectional = (nnProb - 0.5) × 200  (→ -100 to +100 like master bias)
+
+### What DeepSeek Receives
+For each analysis, DeepSeek gets the **full 12-module context**:
+```
+Market: BTC/USDT / 1h | Price: 94520
+AI Supervisor Score: +67 (Strong Bullish) | Signal: LONG
+NN prob=72% acc=68% override=no
+
+12 Modules:
+[▲BULL] SMC/Structure: +78 | w=20% | liveAcc=71% → EMA alignment + BOS
+[▲BULL] Wyckoff: +45 | w=10% | liveAcc=64% → Market phase (Markup)
+[▼BEAR] OI/Funding: -22 | w=10% | liveAcc=58% → Funding rate extreme
+...
+RSI=58 L/S=61.2%L Funding=0.0008 FG=72 (Greed)
+PDH=95000 PDL=92000
+RS_vs_BTC=+1.24%
+```
+
+### Ollama v0.7+ Response Format
+```javascript
+// v0.7+ puts reasoning in separate field — NOT in <think> tags in content
+const nativeThinking = d?.message?.thinking || '';
+const nativeContent  = d?.message?.content  || '';
+// Re-wrap so _parseDeepSeek works uniformly:
+return nativeThinking
+  ? `<think>${nativeThinking}</think>\n${nativeContent}`
+  : nativeContent;
+```
+
+### Configurable Settings (localStorage)
+| Key | Default | Description |
+|-----|---------|-------------|
+| `smc_ollama_url` | `http://localhost:11434` | Ollama server URL |
+| `smc_ollama_model` | `deepseek-r1:8b` | Model to use |
+| `smc_ai_provider` | `deepseek` | Active provider (deepseek/gemini/openai/anthropic) |
+
+---
+
+## 15. Hybrid AI Decision System
+
+Both AI systems independently analyze the market, then their verdicts are **blended** into a single `hybridBias` that drives everything: ghost candles, signal display, scanner results.
+
+### `runDeepSeekAnalysis` (Auto-triggered)
+```javascript
+const runDeepSeekAnalysis = useCallback(async (ctx) => {
+  // Auto-runs on symbol/TF change, debounced 30s
+  // Sends full 12-module scores + market data to DeepSeek
+  // DeepSeek returns: {signal, dsScore:-60..+60, conviction:0-100,
+  //                    reason, agree:[], disagree:[], candle}
+  setDeepSeekAnalysis({...result, symbol, tf, timestamp});
+}, []);
+```
+
+### `hybridBias` useMemo — The Blend Formula
+```javascript
+const hybridBias = useMemo(() => {
+  if (!aiAdjustedBias) return null;
+  if (!deepSeekAnalysis || deepSeekAnalysis.symbol !== symbol)
+    return { ...aiAdjustedBias, source: 'Supervisor', hybridActive: false };
+
+  const aiScore = aiAdjustedBias.score;
+  const dsScore = Math.max(-60, Math.min(60, deepSeekAnalysis.dsScore));
+  const aiDir = aiScore >= 8 ? 1 : aiScore <= -8 ? -1 : 0;
+  const dsDir = dsScore >= 8 ? 1 : dsScore <= -8 ? -1 : 0;
+  const agree   = (aiDir === dsDir) || (aiDir === 0) || (dsDir === 0);
+  const conflict = !agree && aiDir !== 0 && dsDir !== 0;
+
+  // Weighted blend: 65% Supervisor + 35% DeepSeek
+  let hybrid = Math.round(aiScore * 0.65 + dsScore * 0.35);
+  if (agree && aiDir !== 0)  hybrid = Math.round(hybrid * 1.10); // agree boost +10%
+  if (conflict)               hybrid = Math.round(hybrid * 0.70); // conflict dampen -30%
+  hybrid = Math.max(-100, Math.min(100, hybrid));
+
+  return {
+    ...aiAdjustedBias,
+    score: hybrid, hybridSignal, hybridActive: true,
+    agree, conflict,
+    supervisorScore: aiScore, supervisorSignal: aiAdjustedBias.aiSignal,
+    dsScore, dsSignal, dsConviction, dsReason, dsCandle,
+  };
+}, [aiAdjustedBias, deepSeekAnalysis, symbol, tf]);
+```
+
+### How It Affects Everything
+| Component | Without DeepSeek | With DeepSeek |
+|-----------|-----------------|---------------|
+| Signal shown | Supervisor score | Hybrid blended score |
+| Ghost candle direction | aiAdjustedBias.aiSignal | hybridBias.aiSignal |
+| Ghost candle body size | Normal | +12% when agree / -28% when conflict |
+| Ghost candle structure | Normal | "bold impulse" (agree) / "deep range" (conflict) |
+| Chart re-render | On aiAdjustedBias change | Also on hybridBias change |
+
+### Hybrid Decision UI Panel
+Shown in sidebar below the main signal:
+```
+┌─────────────────────────────────────────────────┐
+│ 🤝 Hybrid Decision                   [timestamp] │
+├──────────────┬──────────────┬───────────────────┤
+│ 🧠 Supervisor │  🤝/⚠️       │ 🐋 DeepSeek       │
+│    LONG       │   agree      │    LONG           │
+│    +67        │              │    Conv 82%       │
+├─────────────────────────────────────────────────┤
+│         Combined Signal: LONG +71               │
+│   "Key level rejection at PDH, RSI divergence" │
+│ ✓ Both AIs agree — higher conviction setup      │
+└─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 12. Data Sources & WebSocket Feed
+## 16. AI Chat Tab (Streaming)
+
+### Architecture
+- **`_MsgBubble` component** — standalone React component (extracted to fix hooks-in-map black screen bug)
+- Each message has: `role`, `content`, `thinking` (DeepSeek reasoning), `streaming` (bool), `_sid` (unique stream ID)
+- DeepSeek reasoning shown in collapsible "▼ Show DeepSeek reasoning" section
+
+### Streaming Implementation
+DeepSeek chat uses `stream: true` so tokens appear instantly:
+```javascript
+const resp = await fetch(`${ollamaUrl}/api/chat`, {
+  method: 'POST',
+  body: JSON.stringify({model, messages, stream: true, options: {num_predict: 650}})
+});
+const reader = resp.body.getReader();
+const dec = new TextDecoder();
+let buf = '';
+while (true) {
+  const {done, value} = await reader.read();
+  if (done) break;
+  buf += dec.decode(value, {stream: true});
+  const lines = buf.split('\n');
+  buf = lines.pop() || '';
+  for (const line of lines) {
+    const chunk = JSON.parse(line);
+    accContent += chunk.message?.content || '';
+    accThinking += chunk.message?.thinking || '';
+    if (Date.now() - lastFlush > 80) flushMsg(); // update UI every 80ms
+  }
+}
+```
+
+### Smart Prompt Sizing
+```javascript
+// Detect simple/greeting messages → skip heavy market context for speed
+const isSimple = /^(hi|hello|hey|thanks|ok|okay|yes|no|sure)[\s!?.]*$/i.test(q);
+// Simple: minimal 1-line system prompt + num_predict:250 → responds in ~2s
+// Analysis: full 12-module context + num_predict:650 → responds as tokens stream
+```
+
+### Blinking Cursor
+```jsx
+{msg.streaming && (
+  <span style={{display:'inline-block', width:7, height:13, background:'#5b9bd5',
+    animation:'blink 0.8s step-end infinite'}}>&#8203;</span>
+)}
+```
+
+### Suggestion Chips
+Pre-built quick-send chips:
+- "Why is the signal showing LONG/SHORT?"
+- "Which modules have highest accuracy?"
+- "Is the NN prediction reliable?"
+- "Explain the module disagreement"
+- "What does L/S ratio mean here?"
+- "Should I trust the ghost candles?"
+
+### Context Passed to DeepSeek
+```
+symbol, tf, price, bias score, signal, AI override status
+NN probability, accuracy, recent accuracy, pool size, corrections
+All 12 module scores with weights + live accuracy %
+RSI, L/S ratio, funding rate, Fear & Greed
+PDH/PDL (with SWEPT flag if applicable)
+RS vs BTC score
+Entry/SL/TP levels from trade setup
+```
+
+### Providers Supported
+| Provider | API Key? | Best For |
+|----------|---------|---------|
+| 🤖 DeepSeek-R1 (Local) | No | Full analysis, free, private |
+| 🆓 Gemini (Google) | Yes (free tier) | Fast responses, large context |
+| GPT-4o (OpenAI) | Yes | Code modifications |
+| Claude (Anthropic) | Yes | Reasoning tasks |
+
+---
+
+## 17. Data Sources & WebSocket Feed
 
 ### Crypto (Binance)
-- **REST Spot:** `https://api.binance.com/api/v3/klines` (up to 1000 candles per request)
-- **REST Futures:** `https://fapi.binance.com/fapi/v1/klines` (fallback for futures-only pairs)
+- **REST Spot:** `https://api.binance.com/api/v3/klines` (up to 1000 candles)
+- **REST Futures:** `https://fapi.binance.com/fapi/v1/klines` (fallback)
 - **OI + Funding:** `https://fapi.binance.com/fapi/v1/openInterest` + `/fundingRate`
+- **L/S Ratio:** `https://fapi.binance.com/futures/data/globalLongShortAccountRatio`
 - **WebSocket live:** `wss://stream.binance.com:9443/ws/{symbol}@kline_{tf}`
-- Spot tried first; if 404, futures used and cached in `FUTURES_ONLY` Set
 
-### Stocks/ETFs/Commodities/Indices (Yahoo Finance)
-- Via CORS proxy: `https://api.allorigins.win/raw?url=...` or `https://corsproxy.io/`
+### Stocks/ETFs/Indices (Yahoo Finance)
+- Via CORS proxies: allorigins.win → corsproxy.io fallback
 - Yahoo Finance chart API: `https://query1.finance.yahoo.com/v8/finance/chart/{symbol}`
-- 4h candles are aggregated from 1h data (group 4 consecutive 1h candles)
+- 4h candles: aggregated from 1h data (4 consecutive 1h candles)
 
 ### Fear & Greed Index
-- `https://api.alternative.me/fng/?limit=2` (current + yesterday)
+- `https://api.alternative.me/fng/?limit=2`
 
 ### Intermarket Data
 - DXY, SPX, Gold via Yahoo Finance
-- BTC dominance from CoinGecko global API
+- BTC dominance: CoinGecko global API
 
 ### Poll Frequency
 - **Main poll:** Every 30 seconds (`quiet=true`)
-- **Quiet poll optimization:** Fetches only 100 candles; if last candle timestamp unchanged, skips all TA computation (returns early, no recalculation)
-- **Full load:** On symbol/TF switch, fetches 600 candles + full TA
+- **Quiet poll optimization:** If last candle timestamp unchanged → skip all TA computation
+- **Full load:** On symbol/TF switch → 600 candles + full TA + NN training
 
 ---
 
-## 13. File System Persistence
+## 18. File System Persistence
 
 ### Setup
-Uses the **File System Access API** (Chrome/Edge 86+).
+File System Access API (Chrome/Edge 86+).
 1. User clicks "Connect Folder" → browser shows folder picker
-2. User selects `A:\crypto_prediaction_model` (or any folder)
-3. Directory handle stored in IndexedDB for persistence across browser sessions
-4. On next app start: auto-reconnect if permission still granted
+2. Directory handle stored in IndexedDB for persistence across sessions
+3. Auto-reconnect on next app start if permission still granted
 
 ### Files Written
-| File | Contents | When Written |
-|------|----------|-------------|
-| `model_weights.json` | NN layers, weights, biases | On session count or correction count change |
-| `training_stats.json` | Accuracy, sessions, corrections, news logged | Same condition |
-| `prediction_outcomes.json` | All pending + validated predictions | Same condition |
-| `news_reactions.json` | News → price reaction log | Same condition |
+| File | Contents | Trigger |
+|------|----------|---------|
+| `model_weights.json` | NN layers, weights, biases | Sessions or corrections changed |
+| `training_stats.json` | Accuracy, sessions, corrections | Same |
+| `prediction_outcomes.json` | Pending + validated predictions | Same |
+| `news_reactions.json` | News → price reaction log | Same |
 | `predictions_log.json` | Every prediction made (up to 2000) | Each prediction |
 | `training_history.json` | Training batch history (up to 5000) | Each training run |
 
 ### Smart Write Guard
 ```javascript
-async function fsSaveModel(force=false) {
-  const sessChanged = _nnStats.sessions !== _fsDirtySessionStamp
-  const corChanged = _nnStats.corrections !== _fsDirtyCorStamp
-  if (!force && !sessChanged && !corChanged) return  // skip — nothing changed
+async function fsSaveModel(force = false) {
+  const sessChanged = _nnStats.sessions !== _fsDirtySessionStamp;
+  const corChanged  = _nnStats.corrections !== _fsDirtyCorStamp;
+  if (!force && !sessChanged && !corChanged) return; // skip unchanged
   // ... write files ...
-  _fsDirtySessionStamp = _nnStats.sessions
-  _fsDirtyCorStamp = _nnStats.corrections
 }
 ```
-Only writes to disk when the model has actually learned something new. Prevents constant disk writes on every 30-second poll.
-
-### Immediate Write on Connect
-When folder is connected (either button click or auto-reconnect), `fsSaveModel(true)` is called immediately — force-writing the current model state to disk.
 
 ---
 
-## 14. Scanner System
+## 19. Scanner System — Hybrid Supervisor
 
-Scans multiple symbols in parallel and displays ranked LONG/SHORT signals.
+The scanner analyzes 200+ symbols in parallel, then runs the Hybrid Supervisor on the top picks.
 
-### Configuration (persisted to localStorage)
-- **Asset count:** 1-500 symbols to scan (default: 50)
-- **Auto-rescan interval:** 0.5-60 minutes (default: 5 min)
-- **Timeframe filter:** Which TF to score on
-- **Minimum strength:** Weak/Medium/Strong threshold
+### Phase 1 — Mass Scan (`scanAsset`)
+For every symbol:
+1. Fetch current TF candles + higher TF (HTF_MAP: 1m→5m, 1h→4h, 4h→1d, etc.) in parallel
+2. Run `generateSetup` → all 12 module scores → `calcMasterBias` → raw `score`
+3. **NN-adjusted score:** apply same `aiAdjustedBias` logic as main chart
+```javascript
+const nnWeight = Math.min(0.35, nnConf * nnAccFactor * 0.50);
+const nnContrib = Math.round((nnBull?60:nnBear?-60:0) * nnWeight);
+aiScore = Math.max(-100, Math.min(100, Math.round(score*(1-nnWeight)) + nnContrib));
+```
+4. MTF confirmation: current TF signal vs higher TF signal
+5. Confirmation level: CONFIRMED / PROBABLE / WEAK / DIVERGING / NEUTRAL
 
-### How It Scans
-1. Takes first N symbols from `ALL_SYMBOLS` list (or fetches live Binance list)
-2. For each symbol: fetches candles → runs `generateSetup` → computes all 8 engine scores → calculates Master Bias
-3. Results sorted by |score| descending (strongest signals first)
-4. Displayed in 2-column grid (LONG left, SHORT right) with signal cards
+### Phase 2 — Hybrid Supervisor (`runHybridAnalysis`)
+Runs **after** scan completes, non-blocking. Only fires when DeepSeek provider selected.
+1. Pick top 8 CONFIRMED/PROBABLE assets by `|aiScore|`
+2. For each, send compact prompt to DeepSeek:
+```
+BTC/USDT 1h | Signal:LONG | AI Score:+72 | Conf:84% | Phase:Markup
+HTF(4h):LONG | Confirmation:CONFIRMED | NN:74%bull conf:68% | 24h:+2.4%
+Modules: SMC+78 Wyckoff+45 VP+32 | AIOverride:no | MTFagree:yes
+Return ONLY JSON: {"signal","dsScore","conviction","reason","quality":"A/B/C/D"}
+```
+3. Blend into hybrid score: `hybrid = ai×0.65 + ds×0.35` with agree/conflict modifiers
+4. Update scan cards live as each asset is analyzed (progressive streaming)
+5. Final call: **market overview** summary of the entire scan
 
-### Signal Cards Show
-- Symbol name + exchange badge
-- Master Bias score + label + colored bar
-- Bull% indicator
-- Sparkline mini-chart (10 bars)
-- Dominant scoring engine
-- Click → navigates main chart to that symbol
+### Market Overview (DeepSeek)
+```
+Market scan — 1h: 68 bullish vs 42 bearish. Top hybrid longs: BTC, SOL, ETH.
+Returns: {marketBias, strength:0-100, topLong[], topShort[], summary, watch}
+```
+Displayed as full-width banner above the scanner grid with clickable top picks.
 
-### Performance
-- Scans run with 300ms stagger between symbols to avoid API rate limiting
-- Status indicator shows scan progress and last scan time
+### Scanner Card Display
+Each card shows:
+- **Symbol** + sparkline + 24h change %
+- `[LONG]` signal badge + `[4h LONG]` HTF badge
+- `[✓ CONFIRMED]` confirmation badge
+- `🧠 LONG` NN badge (color: purple=agrees, orange=disagrees)
+- `AI +72` badge (NN-adjusted score, shown if different from raw)
+- `🤝 LONG +75` hybrid badge (green=agree, orange=conflict)
+- `A` quality grade from DeepSeek (A=prime, B=good, C=fair, D=skip)
+- DeepSeek reason: *"RSI divergence at key support, funding neutral"*
+- Bias bar (uses hybridScore when available)
+- `Conf 84%` indicator confidence + `DS 82%` DeepSeek conviction
+
+### Filter Buttons
+| Filter | Meaning |
+|--------|---------|
+| All | Show everything |
+| ✓ Confirmed | All 4 pillars agree (safest trades) |
+| ~ Probable | TFs agree, momentum/micro slightly off |
+| ✗ Weak | Only bias shows direction (low conviction) |
+| ⚡ Diverging | TF conflict — do NOT trade |
+| 🤝 Hybrid | **Both DeepSeek and Supervisor agree** (highest conviction) |
+
+### Sort Options
+| Sort | Orders by |
+|------|-----------|
+| AI Score | `|aiScore|` (NN-adjusted, descending) |
+| 🤝 Hybrid Score | `|hybridScore|` → `|aiScore|` → `|score|` |
+| Most Bullish | hybridScore descending |
+| Most Bearish | hybridScore ascending |
+| 24h Change | absolute % change |
+| Alphabetical | symbol name |
+
+### Scanner Controls
+- **Asset count:** 1–500 symbols (default: 220)
+- **Rescan interval:** 0.5–60 minutes (default: 2 min)
+- **Timeframe:** any of 1m/5m/15m/1h/4h/1d/1w
+- **Watchlist:** add/remove favorites, shown at top of results
+- **`🤝 Hybrid` button:** re-trigger DeepSeek analysis on current results without rescanning
 
 ---
 
-## 15. Background Validation
+## 20. Background Validation
 
 ### Purpose
-When you switch from BTC/5m to SOL/5m, the app continues to track what happened to BTC predictions — it follows up whether the predicted candle formed correctly.
+When you switch from BTC/1h to ETH/4h, the app continues tracking whether BTC/1h predictions were correct.
 
 ### Implementation
 ```javascript
 backgroundValidateAll(currentSym, currentTf)
 // Triggered on every chart symbol/TF switch
 ```
-
-1. Reads `smc_deep_outcomes_v7` — all pending unvalidated predictions
-2. Finds unique symbol+TF combinations (excluding current chart, max 5)
-3. For each: fetches 80 candles from Binance/YF
-4. Runs `validatePendingPredictions` → marks correct/wrong
-5. If wrong → immediate 8-epoch correction retrain
-6. Saves model to FS if anything changed
-
-**Throttle:** 5-minute cooldown between runs (`_bgValidateLastRun` ref) — prevents API flood when rapidly switching charts.
+1. Read all pending predictions from `smc_deep_outcomes_v7`
+2. Find up to 5 other symbol/TF combos with unvalidated predictions
+3. Fetch 80 candles each (500ms stagger to avoid rate limiting)
+4. Validate and retrain if wrong
+5. **5-minute cooldown** between runs
 
 ---
 
-## 16. UI Layout & Tabs
+## 21. UI Layout & Tabs
 
-### Left Sidebar (~320px)
-**Scrollable panel with accordions:**
-- Asset info (price, change, leverage suggestion)
-- Signal button (LONG/SHORT/NEUTRAL with AI supervisor badge)
+### Left Sidebar (~320px, scrollable)
+- Asset price + live WebSocket ticker
+- Signal button (LONG/SHORT/NEUTRAL, pulsing animation) + AI supervisor badge
+- **Hybrid Decision Panel** (DeepSeek + Supervisor combined verdict)
+- **AI Supervisor Card** (NN score, raw score, NN weight%, mlConf bar)
 - Trade setup (entry zone, SL, TP1, TP2, RR ratios)
-- Next candle prediction (direction, type, size, confidence)
-- AI Supervisor card (NN stats: accuracy, live accuracy, corrections, sessions)
+- Next candle prediction (direction, type, body size, range size)
 - SMC Analysis (BOS, FVG, liquidity)
-- Wyckoff + Volume Profile
+- Wyckoff phase + Volume Profile levels
 - Multi-timeframe bias grid
-- Momentum indicators panel (RSI, MACD, StochRSI, CMF)
-- Microstructure panel (delta dominance, absorption, BVIX)
-- OI/Funding panel (crypto only)
-- Intermarket panel (DXY, SPX, Gold, BTC dominance)
-- Sentiment panel (Fear & Greed, news sentiment)
+- Momentum indicators (RSI, MACD, StochRSI, CMF, BB squeeze)
+- Microstructure (delta dominance, absorption count, BVIX)
+- OI/Funding (crypto only — Binance FAPI)
+- L/S Ratio (crowd positioning)
+- RS vs BTC (relative strength)
+- Intermarket (DXY, SPX, Gold, BTC dominance)
+- Sentiment (Fear & Greed + news sentiment)
 
 ### Main Chart Area
 - LightweightCharts 4.1.1 candlestick chart (dark TV theme)
-- EMA lines: EMA9 (blue), EMA21 (orange), EMA50 (purple)
-- FVG zones: horizontal bands (teal/red)
-- Liquidity levels: BSL/SSL horizontal lines
-- Volume Profile: Canvas overlay (right side, 15% chart width)
-- Ghost candles: semi-transparent predicted candles after live price
-- Ghost markers: small shape-only dots (no text)
+- EMA9 (blue), EMA21 (orange), EMA50 (purple)
+- FVG zones (horizontal bands — teal/red)
+- Liquidity levels (BSL/SSL horizontal lines)
+- Volume Profile canvas overlay (right 15%)
+- Ghost candles (up to 50 semi-transparent future candles, AI Supervisor controlled)
+- Ghost markers: shape-only dots (size=0.5, no text labels)
 
 ### Top Tab Bar
 | Tab | Content |
 |-----|---------|
-| **Chart** | Main candlestick chart + analysis |
-| **Scanner** | Multi-symbol signal scanner |
-| **News** | RSS news feed with sentiment analysis |
-
-### Scanner Tab Controls
-- Symbol count input (1-500)
-- Auto-rescan interval (0.5-60 min)
-- Timeframe selector
-- Strength filter
-- Start/Stop scan button
-- FS folder status + connect button
+| **Chart** | Main candlestick chart + full sidebar analysis |
+| **Scanner** | 200+ symbol scan with Hybrid Supervisor analysis |
+| **News** | RSS news feed with sentiment + NN memory logging |
+| **AI Chat** | Streaming DeepSeek-R1 chatbox with full market context |
 
 ---
 
-## 17. How to Use — Trading Guidelines
+## 22. How to Use — Trading Guidelines
 
 ### Initial Setup
-1. Open `docs/index.html` in Chrome or Edge (NOT Firefox — File System API needed)
-2. Click **"📁 Connect Folder"** → select or create `A:\crypto_prediaction_model`
-3. The app auto-loads any existing model from disk
-4. Select your asset from the search bar (Ctrl+K or click search)
-5. Select your timeframe (1m, 5m, 15m, 1h, 4h, 1d, 1w)
+1. Open `docs/index.html` in Chrome or Edge (File System API required)
+2. Run `start_ollama.bat` to start DeepSeek-R1 local AI (see Section 23)
+3. Click **"📁 Connect Folder"** → select any folder for model persistence
+4. Select AI provider: **DeepSeek-R1 (Local — FREE)** in the AI Chat tab
+5. Search for an asset (Ctrl+K or click search bar)
 
 ### Reading the Signal
-1. **Signal Button Color:**
-   - Green LONG = bullish bias (≥+8 score)
-   - Red SHORT = bearish bias (≤-8 score)
-   - Gray NEUTRAL = no clear direction
-
-2. **AI Supervisor Badge:**
-   - "⚠️ NN flipped signal" = NN disagrees with engines — trust the NN if accuracy > 60%
-   - "✓ NN confirms" = all systems agree — higher confidence trade
-
-3. **Master Bias Score Breakdown:**
-   - Check which engines are contributing most
-   - All engines pointing same direction = high conviction
+1. **Signal Button:** Green LONG (+8 score), Red SHORT (-8 score), Gray NEUTRAL
+2. **AI Supervisor Badge:** "⚠️ NN flipped" = trust NN if recentAcc > 60%; "✓ NN confirms" = high conviction
+3. **Hybrid Decision Panel:** If both AIs agree → ✓ higher conviction. If conflict → ⚠️ reduce size/wait
+4. **Score Breakdown:** Raw score (indicators only) vs AI score (NN adjusted)
 
 ### Ghost Candle Reading
-- **Yellow impulse candles** = strong move expected
-- **Orange pullback** = brief counter-move before continuation
-- **Gray inside bars** = consolidation, wait for breakout
-- **Blue breakout candle** = breakout from consolidation incoming
-- **Purple pinbar** = rejection at key level (POC/BB band), possible reversal
+| Color | Pattern | Meaning |
+|-------|---------|---------|
+| 🟡 Yellow | Impulse/Continuation | Strong directional move expected |
+| 🟠 Orange | Pullback | Brief counter-move before continuation |
+| ⬜ Gray | Inside/Range | Consolidation — wait for breakout |
+| 🔵 Blue | Breakout | Breakout from consolidation |
+| 🟣 Purple | Pinbar | Rejection at key level (POC/BB/VWAP) |
 
-### Volume Profile Usage
-- **Price at POC** = expect slow/choppy movement (high interest zone)
-- **Price above VAH** = strong breakout territory — momentum play
-- **Price below VAL** = breakdown territory — short bias
-- **LVN gaps** = price will move quickly through these zones (no resistance)
-- **HVN** = expect price to stall here
+**When ghost candles go ranging/choppy:** AIs are in conflict or low conviction — don't trade.
 
-### Trade Setup (SL/TP)
-- **Stop Loss:** 1.5×ATR from entry (on the wrong side)
-- **TP1:** 2×ATR (1:1.33 minimum RR)
-- **TP2:** 4×ATR (1:2.67 aggressive target)
-- **Suggested leverage:** 3× (RSI extreme), 5× (normal), 10× (low volatility ATR)
+### Scanner Usage
+1. Go to **Scanner** tab → auto-scans 200+ crypto pairs
+2. Sort by **🤝 Hybrid Score** for highest-conviction picks
+3. Filter by **🤝 Hybrid** to see only assets both AIs agree on
+4. Check the **Market Overview panel** for overall market direction from DeepSeek
+5. Grade A picks (🟡 A badge) = DeepSeek rated as prime setup
+6. Click any card → opens that symbol on the main chart
 
 ### When NOT to Trade
-- Master Bias score between -8 and +8 (NEUTRAL) — no edge
-- Ghost candles showing all "inside/range" patterns — market consolidating
+- Master Bias -8 to +8 (NEUTRAL) — no edge
+- Ghost candles all gray inside/range — consolidating
 - RSI > 78 or < 22 — exhaustion, avoid momentum trades
-- OI Funding rate extreme (>0.001 or <-0.001) — counter-trend risk
-- News tab showing HIGH-impact bearish news AND your signal is LONG (fade the signal)
+- OI Funding > 0.001 or < -0.001 — squeeze risk
+- ⚠️ Hybrid conflict — both AIs disagree, reduce size
+- HIGH-impact bearish news + LONG signal — wait for confirmation
 
 ### NN Learning Period
-- First 100 candles: NN not active (too little data)
-- 100-500 candles: NN starting to learn, weight it less
-- 500+ candles + multiple sessions: NN starts being reliable
-- Watch `recentAcc` (rolling-50): if >60% trust NN override; if <50% ignore it
+| Stage | Candle Count | Trust Level |
+|-------|-------------|-------------|
+| Learning | < 150 | Ignore NN — use indicator signal only |
+| Developing | 150-500 | NN has minor influence (5-15% weight) |
+| Trained | 500+ | NN starts being meaningful |
+| Reliable | recentAcc > 60% | Trust NN overrides |
+| Expert | recentAcc > 65% | NN has 55% influence — can override indicators |
 
 ---
 
-## 18. Full Recreation Prompt
+## 23. Ollama Setup (Windows)
+
+### Prerequisites
+1. Install Ollama: https://ollama.ai/download
+2. Pull the model: open Command Prompt → `ollama pull deepseek-r1:8b`
+
+### Starting Ollama with CORS (Required for GitHub Pages)
+The app may be served from `file://` or a GitHub Pages domain. Ollama needs CORS open.
+
+**Method 1 — Double-click the batch file:**
+```
+C:\Users\nagar\Downloads\claude\start_ollama.bat
+```
+
+**Method 2 — Manual PowerShell:**
+```powershell
+Stop-Process -Name ollama -Force -ErrorAction SilentlyContinue
+Start-Sleep 2
+$p = New-Object System.Diagnostics.ProcessStartInfo
+$p.FileName = 'C:\Users\nagar\AppData\Local\Programs\Ollama\ollama.exe'
+$p.Arguments = 'serve'
+$p.UseShellExecute = $false
+$p.EnvironmentVariables['OLLAMA_ORIGINS'] = '*'
+$p.EnvironmentVariables['OLLAMA_HOST'] = '0.0.0.0'
+$proc = [System.Diagnostics.Process]::Start($p)
+```
+
+> ⚠️ **Critical:** Setting `OLLAMA_ORIGINS=*` via `set` in a batch file does NOT work because the env var doesn't inherit to child processes started with `Start-Process`. The PowerShell `ProcessStartInfo.EnvironmentVariables` approach injects the vars directly before the process starts.
+
+### Verify It's Working
+```
+http://localhost:11434/api/tags
+```
+Response should include `deepseek-r1:8b` in the models list.
+
+### Speed Notes
+- **First response:** Slow (model loads into VRAM) — 15-30s
+- **Subsequent:** Faster (model stays loaded) — 5-15s
+- **Simple greetings:** The app detects these and uses a minimal prompt → ~2-5s
+- **Analysis questions:** Full 12-module context → 15-40s (streams in real-time)
+- **Scanner batch:** ~15-20s per asset for top 8 picks
+
+---
+
+## 24. Full Recreation Prompt
 
 Copy this prompt into any AI assistant to recreate this exact project from scratch:
 
----
-
-### PROMPT TO RECREATE SMC PRO ANALYZER
-
 ```
-Build a single-file React 18 trading analyzer called "SMC Pro — Crypto & Stock Analyzer" 
+Build a single-file React 18 trading analyzer called "SMC Pro — Crypto & Stock Analyzer"
 as docs/index.html with NO build step. Use CDN scripts only:
-- React 18 (UMD development)
+- React 18 UMD development
 - Babel Standalone (in-browser JSX)
-- Tailwind CSS (CDN with custom config)
 - LightweightCharts 4.1.1 (TradingView)
 
-TECH STACK:
-- All JavaScript in a single <script type="text/babel"> tag
-- Dark TradingView theme: background #131722, panel #1e222d, border #2a2e39
-- Bull color: #26a69a, Bear: #ef5350, Primary: #2962ff
+Dark TradingView theme: bg=#131722, panel=#1e222d, border=#2a2e39
+Bull=#26a69a, Bear=#ef5350, Primary=#2962ff
 
-══════════════════════════════════════════
-SECTION 1: TECHNICAL ANALYSIS ENGINE
-══════════════════════════════════════════
+════════════════════════════════════════
+SECTION 1: TA ENGINE (pure-JS functions)
+════════════════════════════════════════
+calcEMA(arr, period), calcRSI(closes, 14), calcATR(H,L,C, 14),
+calcMACD(closes, 12,26,9) → {macd,signal,hist,cross,expansion},
+calcStochRSI(closes, 14,3,3), calcCMF(candles, 20),
+calcBB(closes, 20,2), calcKeltner(candles, 20,1.5),
+calcVWAP(candles), calcIchimoku(H,L,C), calcADX(H,L,C, 14),
+detectRSIDivergence, candleType, calcDelta, detectAbsorption
 
-Implement these pure-JS functions operating on OHLCV candle arrays:
+════════════════════════════════════════
+SECTION 2: MARKET STRUCTURE
+════════════════════════════════════════
+detectSwings(H,L, lookback=5), detectFVG(candles),
+detectBOS(candles, swings), calcLiquidityMap(candles)
 
-calcEMA(arr, period): Standard EMA with k=2/(p+1), SMA seed
-calcRSI(closes, period=14): Wilder's smoothed RSI
-calcATR(highs, lows, closes, period=14): True Range with Wilder smoothing
-calcMACD(closes, fast=12, slow=26, signal=9): Returns {macd, signal, hist, prevHist, cross, expansion}
-calcStochRSI(closes, per=14, smoothK=3, smoothD=3): Double-smoothed StochRSI {k, d}
-calcCMF(candles, period=20): Chaikin Money Flow using (close-low-(high-close))/(high-low) × volume
-calcBB(closes, period=20, mult=2): Bollinger Bands {upper, middle, lower, bandwidth}
-calcKeltner(candles, period=20, mult=1.5): EMA ± 1.5×ATR bands
-detectRSIDivergence(closes, rsi): Compare last 12 bars (2×6 windows) for bullish/bearish regular/hidden divergence
-candleType(candle): Classify as Marubozu, Doji, Hammer, Shooting Star, Bullish/Bearish Candle
-calcDelta(candles): Estimate buy/sell volume per candle using (close-low)/(high-low) proxy
-detectAbsorption(candles, atr): High volume (>2× avg) + small range (<0.5×ATR) zones
-calcBVIXProxy(candles, period=14): ATR/price × 100 (volatility % of price)
+════════════════════════════════════════
+SECTION 3: VOLUME PROFILE (100 buckets)
+════════════════════════════════════════
+calcVolumeProfile → {poc, vah, val, hvn[], lvn[]}
+Draw as HTML5 Canvas overlay on right 15% of chart.
+Redraw on every viewport change (subscribeVisibleLogicalRangeChange + wheel + mouseup)
 
-══════════════════════════════════════════
-SECTION 2: MARKET STRUCTURE DETECTION
-══════════════════════════════════════════
+════════════════════════════════════════
+SECTION 4: 12 ANALYSIS MODULES
+════════════════════════════════════════
+Each outputs score -100 to +100:
+1. SMC/EMA Structure (20%) — EMA alignment, BOS, VP context
+2. Wyckoff Phase (10%) — Accumulation/Markup/Distribution/Markdown
+3. Volume Profile (10%) — Multi-TF POC position (1w40%,1d30%,4h20%,1h10%)
+4. OI/Funding (10%) — Binance FAPI funding rate overcrowding
+5. Momentum (10%) — RSI+MACD+StochRSI+CMF
+6. Microstructure (10%) — delta dominance, cumulative delta, absorption
+7. Sentiment (5%) — Fear & Greed + news ratio
+8. Intermarket (5%) — DXY, SPX, Gold, BTC dominance
+9. L/S Ratio (5%) — long/short crowd positioning
+10. RS vs BTC (5%) — relative strength vs BTC
+11. Previous Day H/L (5%) — PDH/PDL sweeps
+12. HTF Bias (5%) — higher timeframe macro trend
 
-detectSwings(highs, lows, lookback=5): Find pivot highs/lows (higher than 5 bars each side), keep last 5
-detectFVG(candles): Fair Value Gaps — bull: candle[i].low > candle[i-2].high, bear: opposite
-detectBOS(candles, swings): Break of Structure — close crossing swing high/low
-detectLiquidityGrabs(candles, levels): Spike beyond level + immediate reversal
-calcLiquidityMap(candles): Returns {bsl, ssl, grabs, clusters} from swing highs/lows
+calcMasterBias: weighted sum of all 12 + adaptive weight system (accurate modules get 1.4× boost)
+_modAccStats[name] = {correct, total} — live accuracy per module
 
-══════════════════════════════════════════
-SECTION 3: VOLUME PROFILE ENGINE
-══════════════════════════════════════════
-
-calcVolumeProfile(candles, numBuckets=100):
-- Divide price range into 100 buckets
-- Distribute volume proportionally across overlapping buckets per candle
-- Find POC (max volume bucket)
-- Expand from POC until 70% volume covered → VAH/VAL (Value Area)
-- HVN: buckets > 2× average volume
-- LVN: buckets < 0.3× average volume
-- Returns {poc, vah, val, hvn, lvn, bSz, vols, minP, pocIdx, inVA}
-
-Draw VP as Canvas overlay on the right 15% of chart area.
-Colors: POC=red line, VAH/VAL=teal lines, in-VA bars=teal fill, out-VA=gray fill
-Redraw VP canvas on EVERY viewport change:
-  chartInst.timeScale().subscribeVisibleLogicalRangeChange(handler)
-  + wheel, mouseup, touchend DOM events on chart element
-Use priceToCoordinate() fresh on each redraw.
-
-══════════════════════════════════════════
-SECTION 4: 8 SCORING ENGINES
-══════════════════════════════════════════
-
-Each returns {score: -100 to +100, signals: {}}
-
-Engine 1 — SMC/EMA Structure (weight 20%):
-  bull_pct: price>EMA9(+25), price>EMA21(+20), price>EMA50(+15), RSI>50(+20), BOS bull(+20), VP(+5)
-  smcRaw = (bull_pct - 50) × 2
-
-Engine 2 — Wyckoff Phase (weight 10%):
-  Markup(+30), Accumulation(+15), Distribution(-15), Markdown(-30)
-  Detection: bullBias+RSI>55=Markup, price>EMA50+RSI>60=Distribution, bearBias+RSI<45=Markdown
-
-Engine 3 — Volume Profile (weight 10%):
-  Multi-TF VP (1w=40%, 1d=30%, 4h=20%, 1h=10%) weighted by price vs POC
-
-Engine 4 — Momentum Score (weight 10%):
-  calcMomentumScore: RSI + RSI divergence + MACD + StochRSI + CMF
-  Combine sub-scores, return total -100 to +100
-
-Engine 5 — Microstructure Score (weight 10%):
-  calcMicrostructureScore: delta dominance (±20), cumulative delta divergence (±15), absorption (+5)
-
-Engine 6 — OI/Funding Score (weight 10%, crypto only):
-  FR > 0.001 → -20 (longs overleveraged), FR < -0.001 → +20
-  FR > 0.0003 → -10, FR < -0.0003 → +10
-
-Engine 7 — Sentiment Score (weight 5%):
-  Fear&Greed ≤25 → +20, ≥75 → -20; news bull/bear ratio ±10
-
-Engine 8 — Intermarket Score (weight 5%):
-  DXY up → -10 for crypto; SPX up → +10 (risk-on)
-
-calcMasterBias: Weighted sum of all 8 engines + 10% ML boost
-Score > +60 = Strong Bullish, > +30 = Bullish, -30 to +30 = Neutral, etc.
-
-══════════════════════════════════════════
+════════════════════════════════════════
 SECTION 5: SIGNAL STABILITY
-══════════════════════════════════════════
+════════════════════════════════════════
+biasEMA = biasEMA×0.65 + newScore×0.35
+Hold lock: flip only after 2 consecutive readings in new direction
 
-Apply TWO stability layers to Master Bias:
+════════════════════════════════════════
+SECTION 6: NEURAL NETWORK (pure JS)
+════════════════════════════════════════
+Architecture: [96, 64, 32, 3] — Xavier init, sigmoid, backprop
+12 features × 8 candle sequence = 96 inputs
+Outputs: direction prob, magnitude, volatility
+Training: 20 epochs, LR=0.02, wrong samples weight=5, size-wrong weight=3
+Self-correction: immediate 8-epoch retrain on wrong direction/size prediction
+smc_deep_nn_v7 / smc_deep_stats_v7 / smc_deep_outcomes_v7
 
-1. EMA Smoothing: biasEMA = Math.round(biasEMA × 0.65 + newScore × 0.35)
-   Only 35% influence from new reading
+Cross-TF pool (smc_nn_pool_v1, max 3000):
+- Every TF opened samples 600 examples into shared pool
+- Training uses pool + fresh data for generalization
 
-2. Hold Lock: Signal only flips after 2 CONSECUTIVE readings in new direction
-   Use useRef for biasEMA, lastSignal, signalHoldCount
+BroadcastChannel('smc_nn_sync'):
+- On training complete → broadcast weights to all open tabs
+- All tabs update _nnInst immediately
 
-══════════════════════════════════════════
-SECTION 6: DEEP LEARNING NEURAL NETWORK
-══════════════════════════════════════════
+Next-candle timers:
+- _TF_MS = {1m:60000, 5m:300000, 1h:3600000, ...}
+- Set timeout at lastTs + tfMs + 4s
+- On fire: fetch fresh candles, validate predictions, retrain if wrong, reschedule
 
-Implement class NeuralNet with pure JS:
-- Architecture: [96, 64, 32, 3] layers
-- Xavier initialization: scale = sqrt(2/inputSize)
-- Sigmoid activation everywhere
-- Standard backpropagation with configurable LR and epochs
-- Methods: predict(input), train(data, lr, epochs), toJSON(), fromJSON()
+Size accuracy tracking:
+- magErr = |predMag - actualMag| / actualMag
+- volErr = |predVol - actualVol| / actualVol
+- sizeWrong if magErr > 0.60 or volErr > 0.60
 
-Feature extraction per candle (12 features, all normalized 0-1):
-1. RSI/100
-2. MACD hist/(ATR×6) normalized
-3. BB position (close-lower)/(upper-lower)
-4. StochRSI K/100
-5. Volume ratio vs 20-bar avg (capped 3×, then /3)
-6. Body direction (0 or 1)
-7. Body fraction |close-open|/(high-low)
-8. Price > EMA9 (0 or 1)
-9. Price > EMA21 (0 or 1)
-10. Price > EMA50 (0 or 1)
-11. 5-bar slope normalized ÷ (ATR×5)
-12. CMF normalized (cmf+1)/2
-
-SEQ_LEN=8 candles → flattened 96-input vector
-
-Labels for next candle: [direction (0/1), magnitude (move/2ATR clamped), volatility (range/3ATR clamped)]
-
-Training:
-- Full: 20 epochs, LR=0.02
-- Skip if candle count change < 2 AND no new corrections
-- Include error-correction samples at weight=5
-
-Self-correction:
-- Log every prediction: {input, prediction[3], anchorPrice, anchorTime, symbol, tf}
-- Validate when next candle known: compare predicted direction vs actual
-- If wrong: immediate retrain (8 epochs, LR=0.03) with weight=5 samples
-- Track: corrections count, recentCorrect/recentTotal (rolling-50 window)
-
-localStorage keys: smc_deep_nn_v7, smc_deep_stats_v7, smc_deep_outcomes_v7, smc_deep_news_v7
-
-══════════════════════════════════════════
+════════════════════════════════════════
 SECTION 7: AI SUPERVISOR OVERRIDE
-══════════════════════════════════════════
-
-Blend NN into Master Bias score:
-  maxWeight = liveAcc>=65 ? 0.55 : liveAcc>=60 ? 0.48 : 0.40
+════════════════════════════════════════
+aiAdjustedBias useMemo:
+  maxWeight = liveAcc>=65?0.55:liveAcc>=60?0.48:0.40
   nnWeight = min(maxWeight, max(0.05, nnConf×0.6 + max(0,(liveAcc-50)/80)))
-  nnDirectional = (prob-0.5)×200
-  aiAdjustedBias = masterBias×(1-nnWeight) + nnDirectional×nnWeight
+  aiScore = masterBias×(1-nnWeight) + (prob-0.5)×200×nnWeight
 
-Show badge: "⚠️ NN flipped signal" or "✓ NN confirms" on trade signal button
+════════════════════════════════════════
+SECTION 8: GHOST CANDLE SYSTEM
+════════════════════════════════════════
+futureCandlesSim(candles, signal, atr, count=50, ctx):
+ctx includes: nnProb, nnMag, nnVol, aiConf, aiOverride, features[],
+              accWeightedConviction, hybridActive, hybridAgree, hybridConflict,
+              keyLevels (EMA200, VWAP, Ichimoku A&B, PDH, PDL)
 
-══════════════════════════════════════════
-SECTION 8: GHOST CANDLE PREDICTION
-══════════════════════════════════════════
+Module agreement analysis → agreementRatio → effectiveConf
+Body size: baseBody = max(avgBody×0.70, nnMag×2×atr) × biasMult × confMult × momMult × hybridBoost/Damp
+hybridBoost = hybridAgree ? 1.12 : 1.0
+hybridDamp = hybridConflict ? 0.72 : 1.0
+baseRange × (hybridConflict ? 1.25 : 1.0)
 
-futureCandlesSim(candles, signal, atr, count=12, ctx):
-1. Run NN to get {nnProb, nnMag, nnVol}
-2. Size floor: baseBody = max(avgBody×0.70, nnMag×2×atr)
-              baseRange = max(avgRange×0.60, nnVol×3×atr)
-3. Select structure sequence by NN confidence:
-   nnConf > 0.35: impulse→continuation→continuation→pullback (repeat)
-   nnConf > 0.15: impulse→inside→inside→breakout (repeat)
-   else: range→inside alternating
-4. Inject pinbar at VP/BB key levels
-5. Build OHLC per type with body sizes:
-   impulse=55-100%, continuation=55%, pullback=38%, inside=18%,
-   breakout=88%, pinbar=7% body+72% wick, range=22%
-6. Apply RSI dampening (×0.5 at extremes), BB dampening (×0.35 at bands)
-7. Decay factor: max(0.22, 1-i×0.045) per candle
+Structure sequences (highest priority first):
+1. hybridConflict → deep range pattern
+2. hybridAgree + effectiveConf>0.45 → bold impulse
+3. BB squeeze → coil→breakout
+4. supAiOverride + agreementRatio<0.55 → H&S ranging
+5. adxVal>25 + agreementRatio>0.60 → Elliott 5-wave
+6. adxVal>15 → impulse-consolidation
+7. default → ranging
 
-Colors: impulse/continuation=yellow, pullback=orange, inside=gray, breakout=blue, pinbar=purple
-Markers: shape-only, size=0.5, NO text labels
+Candle types: impulse(yellow), continuation(yellow), pullback(orange),
+              inside(gray), breakout(blue), pinbar(purple), range(gray)
+Inject pinbar near key levels (within 0.4×ATR)
+Decay: max(0.22, 1 - i×0.045) per candle
 
-══════════════════════════════════════════
-SECTION 9: NEWS INTELLIGENCE
-══════════════════════════════════════════
+════════════════════════════════════════
+SECTION 9: DEEPSEEK-R1 INTEGRATION
+════════════════════════════════════════
+Ollama local: POST http://localhost:11434/api/chat
+Model: deepseek-r1:8b (configurable via localStorage)
 
-11 RSS feeds: Yahoo Finance, CNBC, CoinDesk, Google News (Fed, Geo, Crypto, Markets, Macro)
-3 CORS proxy fallbacks: allorigins.win, corsproxy.io, codetabs.com
-Parse with DOMParser, score each headline with bullish/bearish keyword matching
-Impact scoring with HIGH-impact keyword multiplier (2×)
-Only log HIGH-impact + directional (non-neutral) to NN news memory
+callOllamaJSON(sysPrompt, userMsg, maxTokens=400):
+- stream:false for structured JSON calls
+- Extract JSON via /\{[\s\S]*\}/ regex from response
+- Ollama v0.7+: reasoning in message.thinking, answer in message.content
 
-Categories with colors: FED/RATES(orange), WAR/GEO(red), CRYPTO REG(blue),
-EARNINGS(teal), MACRO(purple), CRYPTO MARKET(cyan), STOCK MARKET(green)
+hybridBias useMemo:
+  hybrid = aiScore×0.65 + dsScore×0.35
+  if agree → hybrid×1.10
+  if conflict → hybrid×0.70
+  hybridActive: true when DeepSeek has analyzed this symbol/TF
 
-══════════════════════════════════════════
-SECTION 10: FILE SYSTEM PERSISTENCE
-══════════════════════════════════════════
+runDeepSeekAnalysis: auto-triggers on symbol/TF change, debounced 30s
+Sends all 12 module scores + market data, gets {signal, dsScore, conviction, reason, agree[], disagree[], candle}
 
-Use File System Access API (showDirectoryPicker):
-- Store directory handle in IndexedDB for auto-reconnect
-- Files: model_weights.json, training_stats.json, prediction_outcomes.json,
-         news_reactions.json, predictions_log.json, training_history.json
-- Smart write guard: only write when sessions or corrections count changed
-  (track _fsDirtySessionStamp and _fsDirtyCorStamp)
-- Force write on folder connect
+Hybrid Decision UI: 3-column panel (Supervisor|agree/conflict|DeepSeek) + combined result box
 
-══════════════════════════════════════════
-SECTION 11: DATA FETCHING
-══════════════════════════════════════════
+════════════════════════════════════════
+SECTION 10: AI CHAT TAB (STREAMING)
+════════════════════════════════════════
+_MsgBubble component (standalone — NOT inline in map):
+- Shows collapsible DeepSeek thinking section
+- Blinking cursor ▌ (@keyframes blink) while streaming
+- msg.streaming flag, msg._sid unique stream ID
 
-Crypto: Binance REST (spot first, futures fallback), WebSocket live feed
-Stocks/ETFs: Yahoo Finance via CORS proxy
+Stream path for DeepSeek (stream:true):
+- ReadableStream + NDJSON parsing
+- Accumulate content + thinking, flush to React state every 80ms
+- Simple messages (hi/hello): minimal prompt + num_predict:250
+- Analysis questions: full 12-module context + num_predict:650
+
+════════════════════════════════════════
+SECTION 11: SCANNER + HYBRID SUPERVISOR
+════════════════════════════════════════
+scanAsset: fetch current TF + HTF → run all 12 modules → compute aiScore (NN-adjusted)
+MTF confirmation: CONFIRMED/PROBABLE/WEAK/DIVERGING
+
+runHybridAnalysis (called after each scan):
+- Pick top 8 CONFIRMED/PROBABLE by |aiScore|
+- For each: send compact prompt to DeepSeek → get {signal, dsScore, conviction, reason, quality:A/B/C/D}
+- Blend: hybrid = ai×0.65 + ds×0.35 + agree/conflict modifiers
+- Update scan cards progressively as each is analyzed
+- Final: market overview call → {marketBias, strength, topLong[], topShort[], summary, watch}
+
+Market Overview panel: full-width banner with market bias, strength bar, clickable top picks
+
+Scanner cards show: aiScore badge, 🤝hybrid badge, quality grade, DS reason, DS conviction
+Filter: 🤝Hybrid = both AIs agree + |hybridScore|>=10
+Sort: 🤝Hybrid Score = hybridScore > aiScore > raw score
+
+════════════════════════════════════════
+SECTION 12: DATA & STORAGE
+════════════════════════════════════════
+Crypto: Binance REST + WebSocket, FAPI for OI/Funding/L-S ratio
+Stocks: Yahoo Finance via CORS proxy
 Fear & Greed: api.alternative.me/fng
-Intermarket: DXY, SPX, Gold via Yahoo Finance; BTC dominance via CoinGecko
+Intermarket: DXY, SPX, Gold (Yahoo); BTC dominance (CoinGecko)
+Poll: every 30s, quiet mode skips TA if last candle unchanged
 
-Quiet poll (every 30s, quiet=true):
-- Fetch only 100 candles
-- If last candle timestamp unchanged: return early, skip all TA
-- Otherwise: fetch 600 candles, run full analysis
+File System Access API:
+- IndexedDB for directory handle auto-reconnect
+- Files: model_weights, training_stats, prediction_outcomes, news_reactions,
+         predictions_log, training_history
+- Smart write guard: only write when sessions or corrections changed
 
-══════════════════════════════════════════
-SECTION 12: SCANNER
-══════════════════════════════════════════
+localStorage keys: smc_deep_nn_v7, smc_deep_stats_v7, smc_deep_outcomes_v7,
+                   smc_nn_pool_v1, smc_mod_acc_v1, smc_favorites, smc_scan_limit,
+                   smc_ai_provider, smc_ollama_url, smc_ollama_model
 
-Parallel scan of up to 500 symbols with configurable:
-- Asset count (localStorage persisted)
-- Auto-rescan interval (localStorage persisted)
-- TF filter, strength threshold
+════════════════════════════════════════
+UI LAYOUT
+════════════════════════════════════════
+Left sidebar 320px scrollable + main chart + top tab bar (Chart|Scanner|News|AI Chat)
 
-Show results in 2-column grid (LONG/SHORT) with sparklines, bias bars, signal cards
-Click card → navigate main chart to that symbol
+Sidebar includes Hybrid Decision Panel (when DeepSeek active):
+3-column: Supervisor signal | 🤝/⚠️ | DeepSeek signal + combined result
 
-══════════════════════════════════════════
-SECTION 13: BACKGROUND VALIDATION
-══════════════════════════════════════════
+Chart: LightweightCharts 4.1.1, EMA9/21/50, FVG zones, BSL/SSL lines,
+       VP canvas overlay (right 15%), 50 ghost candles, shape-only markers
 
-On every chart symbol/TF switch: backgroundValidateAll()
-- Read all pending predictions
-- Find up to 5 other symbol/TF combos with unvalidated predictions
-- Fetch 80 candles each, 500ms stagger
-- Validate and correct NN if wrong
-- 5-minute cooldown between runs
-
-══════════════════════════════════════════
-UI REQUIREMENTS
-══════════════════════════════════════════
-
-Layout: Left sidebar (320px scrollable) + Main chart area
-Tabs: Chart | Scanner | News
-
-Sidebar sections (accordions):
-- Asset price + live WebSocket feed
-- Signal button (LONG/SHORT/NEUTRAL, pulsing animation) + AI supervisor badge
-- Trade setup (entry zone, SL, TP1, TP2, RR ratios)
-- Next candle prediction
-- AI Supervisor stats card
-- SMC Analysis (BOS, FVG, liquidity levels)
-- Wyckoff phase + Volume Profile levels
-- Multi-timeframe bias grid (1m/5m/15m/1h/4h/1d/1w)
-- Momentum indicators (RSI, MACD, StochRSI, CMF, BB squeeze)
-- Microstructure (delta dominance, absorption count, BVIX)
-- OI/Funding (crypto only, from Binance FAPI)
-- Intermarket (DXY, SPX, Gold, BTC dominance)
-- Sentiment (Fear & Greed + news breakdown)
-
-Chart overlays:
-- EMA9 (blue), EMA21 (orange), EMA50 (purple)
-- FVG zones (horizontal bands)
-- BSL/SSL liquidity lines
-- Volume Profile canvas (right 15%)
-- Ghost candles (12 semi-transparent future candles)
-- Ghost markers (shape-only, size 0.5, no text)
-
-Symbol universe:
-- 150+ crypto pairs (Binance USDT pairs)
-- 30+ stocks (AAPL, MSFT, NVDA, TSLA, etc.)
-- ETFs (SPY, QQQ, GLD, etc.)
-- Commodities (Gold, Oil, Silver futures)
-- Indices (S&P 500, NASDAQ, VIX)
-- Support dynamic Binance symbol list fetch
-
-Search: Ctrl+K modal with fuzzy search, type badges, exchange labels
-
-Timeframes: 1m, 5m, 15m, 1h, 4h, 1d, 1w
+Scanner: 2-column grid, 200+ symbols, watchlist pinned at top,
+         DeepSeek progress bar + Market Overview panel, hybrid badges,
+         manual "🤝 Hybrid" re-analyze button
 ```
 
 ---
 
 ## Quick Reference Card
 
-| What | Signal | Action |
-|------|--------|--------|
-| Master Bias > +60 + NN confirms | Strong Bullish | LONG with 5-10× leverage |
-| Master Bias +30 to +60 | Bullish | LONG with 3-5× leverage |
-| Master Bias -8 to +8 | Neutral | Wait / no trade |
-| Master Bias -30 to -60 | Bearish | SHORT with 3-5× leverage |
-| Master Bias < -60 + NN confirms | Strong Bearish | SHORT with 5-10× leverage |
-| NN flipped signal badge | NN override | Trust NN if recentAcc > 60% |
-| RSI > 78 or < 22 | Exhaustion | Reduce size / wait |
-| All ghost candles gray (inside) | Consolidation | Wait for breakout signal |
-| Price at POC | Congestion | Tighter SL, smaller size |
-| HIGH-impact bearish news | Risk-off | Don't go LONG regardless of signal |
+| Signal Condition | Action |
+|-----------------|--------|
+| Hybrid score > +60 + both AIs agree | LONG, higher confidence |
+| Hybrid score > +30 | LONG, standard size |
+| Hybrid -8 to +8 | Wait — no edge |
+| ⚠️ AI conflict | Reduce size or wait for agreement |
+| All gray ghost candles | Consolidation — don't trade |
+| Scanner grade A + 🤝 Hybrid filter | Highest conviction picks |
+| RSI > 78 or < 22 | Avoid momentum trades — exhaustion |
+| Funding > 0.001 | Longs overcrowded — short squeeze risk |
+| PDH/PDL swept | Liquidity grab — watch for reversal |
+| DeepSeek streaming cursor ▌ | Analysis in progress — wait |
 
 ---
 
-*Documentation generated for SMC Pro v1.0 — April 2026*
+*SMC Pro Analyzer — Documentation v2.0 — April 2026*  
+*GitHub: https://github.com/naga1412/Crp_Pre*
