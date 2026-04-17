@@ -543,28 +543,32 @@ function scoreRS(rsData){
   return 0;
 }
 
-function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlSig,lsSig,rsSig,taSig){
+function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlSig,lsSig,rsSig,taSig,adaptiveW){
   if(!setup) return null;
+  const aw=adaptiveW||_MODULE_BASE_W; // fall back to base weights if not provided
   const bPct=setup.bull_pct||50;
   const smcRaw=(bPct-50)*2;
   const wPhase={'Markup':30,'Accumulation':15,'Distribution':-15,'Markdown':-30};
   const wyRaw=wPhase[setup.phase]||0;
   let vpRaw=0;
   if(mtfVP&&price!=null){const W={'1w':40,'1d':30,'4h':20,'1h':10};let ws=0,wt=0;for(const[t,w]of Object.entries(W)){const vp=mtfVP[t];if(vp){wt+=w;ws+=(price>vp.poc?w:-w*0.5);}}if(wt>0)vpRaw=Math.round(ws/wt*100);}
+
+  // Helper to get accuracy % for display
+  const getAcc=(name)=>{const s=_modAccStats[name];return s&&s.total>=10?Math.round(s.correct/s.total*100):null;};
+
   const features=[
-    {n:'SMC',          v:smcRaw,               w:0.18},
-    {n:'Wyckoff',      v:wyRaw,                 w:0.09},
-    {n:'VP',           v:vpRaw,                 w:0.09},
-    {n:'OI/Funding',   v:oiSig?.score||0,       w:0.09},
-    {n:'Momentum',     v:momSig?.score||0,       w:0.09},
-    {n:'Microstructure',v:microSig?.score||0,   w:0.09},
-    {n:'Sentiment',    v:sentSig?.score||0,      w:0.05},
-    {n:'Intermarket',  v:imSig?.score||0,        w:0.05},
-    // ── New analytical modules ──────────────────────────────
-    {n:'PDH/PDL Sweep',v:pdhlSig,               w:0.10},
-    {n:'L/S Ratio',    v:lsSig,                  w:0.09},
-    {n:'RS vs BTC',    v:rsSig,                  w:0.08},
-    {n:'TA Indicators', v:taSig||0,              w:0.09},
+    {n:'SMC',           v:smcRaw,              w:aw['SMC']||0.18,           acc:getAcc('SMC')},
+    {n:'Wyckoff',       v:wyRaw,               w:aw['Wyckoff']||0.09,       acc:getAcc('Wyckoff')},
+    {n:'VP',            v:vpRaw,               w:aw['VP']||0.09,            acc:getAcc('VP')},
+    {n:'OI/Funding',    v:oiSig?.score||0,     w:aw['OI/Funding']||0.09,    acc:getAcc('OI/Funding')},
+    {n:'Momentum',      v:momSig?.score||0,    w:aw['Momentum']||0.09,      acc:getAcc('Momentum')},
+    {n:'Microstructure',v:microSig?.score||0,  w:aw['Microstructure']||0.09,acc:getAcc('Microstructure')},
+    {n:'Sentiment',     v:sentSig?.score||0,   w:aw['Sentiment']||0.05,     acc:getAcc('Sentiment')},
+    {n:'Intermarket',   v:imSig?.score||0,     w:aw['Intermarket']||0.05,   acc:getAcc('Intermarket')},
+    {n:'PDH/PDL Sweep', v:pdhlSig||0,          w:aw['PDH/PDL Sweep']||0.10, acc:getAcc('PDH/PDL Sweep')},
+    {n:'L/S Ratio',     v:lsSig||0,            w:aw['L/S Ratio']||0.09,     acc:getAcc('L/S Ratio')},
+    {n:'RS vs BTC',     v:rsSig||0,            w:aw['RS vs BTC']||0.08,     acc:getAcc('RS vs BTC')},
+    {n:'TA Indicators', v:taSig||0,            w:aw['TA Indicators']||0.09, acc:getAcc('TA Indicators')},
   ];
   const weighted=features.reduce((a,f)=>a+f.v*f.w,0);
   const mlBoost=weighted*0.10;
@@ -668,6 +672,64 @@ function _loadNNStats(){
   return _nnStats;
 }
 _loadNNStats();
+
+// ─── MODULE ADAPTIVE WEIGHTS ──────────────────────────────────────────────────
+const _MOD_ACC_KEY='smc_mod_acc_v1';
+// Base weights — used as starting point before learning kicks in
+const _MODULE_BASE_W={
+  'SMC':0.18,'Wyckoff':0.09,'VP':0.09,'OI/Funding':0.09,
+  'Momentum':0.09,'Microstructure':0.09,'Sentiment':0.05,'Intermarket':0.05,
+  'PDH/PDL Sweep':0.10,'L/S Ratio':0.09,'RS vs BTC':0.08,'TA Indicators':0.09
+};
+// Per-module rolling accuracy — {ModuleName: {correct:N, total:N, window:[0/1,...]}}
+let _modAccStats={};
+(function _loadModAcc(){
+  try{const s=localStorage.getItem(_MOD_ACC_KEY);if(s)_modAccStats=JSON.parse(s);}catch(_){}
+})();
+function _saveModAcc(){try{localStorage.setItem(_MOD_ACC_KEY,JSON.stringify(_modAccStats));}catch(_){}}
+
+// Update each module's rolling accuracy when a candle closes
+// features = [{n:'SMC', v:20, w:0.18}, ...] from masterBias.features
+// wasBullish = completed candle was bullish (close >= open)
+function updateModuleAccuracy(features, wasBullish){
+  if(!features) return;
+  let changed=false;
+  for(const f of features){
+    if(Math.abs(f.v||0)<3) continue; // module had no real opinion — skip neutrals
+    const votedBull=f.v>0;
+    const wasCorrect=votedBull===wasBullish;
+    if(!_modAccStats[f.n]) _modAccStats[f.n]={correct:0,total:0,window:[]};
+    const s=_modAccStats[f.n];
+    s.window=[...(s.window||[]).slice(-49), wasCorrect?1:0]; // rolling 50-candle window
+    s.correct=s.window.filter(Boolean).length;
+    s.total=s.window.length;
+    changed=true;
+  }
+  if(changed) _saveModAcc();
+}
+
+// Compute adaptive weights from module accuracy stats
+// Returns {ModuleName: weight} — normalized so the total stays the same as base total
+function getAdaptiveWeights(){
+  const adapted={};
+  let adaptedSum=0;
+  for(const[name,bw]of Object.entries(_MODULE_BASE_W)){
+    const s=_modAccStats[name];
+    let mult=1.0; // neutral: no data yet
+    if(s&&s.total>=10){
+      const acc=s.correct/s.total;
+      // acc=1.0 → mult=2.0 (double weight) | acc=0.5 → mult=1.0 | acc=0.0 → mult=0.25 (quartered)
+      mult=Math.max(0.25,Math.min(2.0,0.25+acc*1.75));
+    }
+    adapted[name]=bw*mult;
+    adaptedSum+=bw*mult;
+  }
+  // Normalize: keep the total weight sum stable (same as base total ~1.09)
+  const baseSum=Object.values(_MODULE_BASE_W).reduce((a,b)=>a+b,0);
+  const factor=baseSum/adaptedSum;
+  for(const name of Object.keys(adapted)) adapted[name]=adapted[name]*factor;
+  return adapted;
+}
 
 // Extract 12 features for a single candle at idx (reads across ALL analysis engines)
 function _candleFeatures(candles,idx){
@@ -2604,6 +2666,8 @@ const App=()=>{
   const pdlLineRef=useRef(null);
   const indSeriesRef=useRef({}); // holds all indicator series {bb1,bb2,bb3,vwap,ema200,...}
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
+  const lastBiasForAccRef=useRef(null); // stores {features, score} to evaluate after candle closes
+  const lastCandleTsRef=useRef(0);      // tracks last seen candle timestamp
 
   // Fetch all Binance symbols on mount
   useEffect(()=>{
@@ -2815,6 +2879,23 @@ const App=()=>{
     connect();
     return()=>{dead=true;try{wsRef.current?.close();}catch(_){}};
   },[symbol,tf,usePerp]);
+
+  // ── Module accuracy tracking: evaluate each module when a new candle closes ──
+  useEffect(()=>{
+    if(!candles||candles.length<2) return;
+    const latestTs=candles[candles.length-1].timestamp;
+    if(lastCandleTsRef.current>0 && latestTs>lastCandleTsRef.current){
+      // A new candle just arrived — the PREVIOUS candle is now fully closed
+      const completed=candles[candles.length-2];
+      if(completed && lastBiasForAccRef.current){
+        const wasBullish=completed.close>=completed.open;
+        updateModuleAccuracy(lastBiasForAccRef.current,wasBullish);
+      }
+    }
+    lastCandleTsRef.current=latestTs;
+    // Store current module features for evaluation on NEXT candle close
+    if(masterBias?.features) lastBiasForAccRef.current=masterBias.features;
+  },[candles]);
 
   // FS auto-connect on mount (re-uses permission from previous session)
   useEffect(()=>{
@@ -3182,12 +3263,13 @@ const App=()=>{
   const _signalHoldCount=React.useRef(0);
 
   const masterBias=useMemo(()=>{
+    const adaptiveWeights=getAdaptiveWeights();
     // Compute scores for the new modules (live state → score number)
     const pdhlScore=scorePDHL(pdhl,price);
     const lsScore=scoreLSRatio(lsRatio);
     const rsScore=scoreRS(rsData);
     const taScore=calcTAIndicatorScore(candles,price); // EMA200+SAR+VWAP+Ichimoku+ADX+OBV+MFI+CCI+W%R
-    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlScore,lsScore,rsScore,taScore);
+    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlScore,lsScore,rsScore,taScore,adaptiveWeights);
     if(!raw) return null;
     // EMA smoothing: 65% weight to history, 35% to new reading
     // Result: signal needs several consistent ticks in same direction to actually flip
@@ -3756,20 +3838,39 @@ const App=()=>{
                 </div>
               </Section>
 
-              <Section title="Signal Breakdown" icon="⚖" open={false} info="Shows exactly how the Master Bias Score was calculated. Each row = one module. Bar extends right (green) = bullish contribution, left (red) = bearish. Number = raw score. % = weight in the final calculation. Dominant bars drive the overall signal.">
+              <Section title="Signal Breakdown" icon="⚖" open={false} info="Shows exactly how the Master Bias Score was calculated. Each row = one module. Bar extends right (green) = bullish contribution, left (red) = bearish. Number = raw score. Acc% = rolling accuracy over last 50 candles (green ≥60%, red ≤40%). Wt = adaptive weight — increases when a module is consistently right.">
                 {masterBias&&(<>
                   <div style={{marginBottom:6}}>
-                    {masterBias.features.map((f,i)=>(
-                      <div key={i} style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
-                        <span style={{fontSize:10,color:'#787b86',minWidth:90,whiteSpace:'nowrap'}}>{f.n}</span>
-                        <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden',position:'relative'}}>
-                          <div style={{position:'absolute',left:'50%',top:0,width:1,height:'100%',background:'#2a2e3988'}}/>
-                          <div style={{position:'absolute',left:f.v>=0?'50%':`${50+f.v/2}%`,width:`${Math.abs(f.v)/2}%`,height:'100%',background:f.v>0?'#26a69a':'#ef5350',borderRadius:2}}/>
+                    <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginBottom:6,fontSize:9,color:'#555'}}>
+                      <span>Score</span><span>Acc%</span><span>Wt</span>
+                    </div>
+                    {masterBias.features.map((f,i)=>{
+                      const barW=Math.abs(f.v*f.w)/3;
+                      const isPos=f.v>=0;
+                      const accColor=f.acc==null?'#555':f.acc>=60?'#26a69a':f.acc<=40?'#ef5350':'#ffb74d';
+                      return(
+                        <div key={i} style={{display:'flex',alignItems:'center',gap:4,marginBottom:4}}>
+                          <span style={{fontSize:10,color:'#787b86',minWidth:88,whiteSpace:'nowrap'}}>{f.n}</span>
+                          <div style={{flex:1,height:4,background:'#1e222d',borderRadius:2,position:'relative'}}>
+                            <div style={{position:'absolute',[isPos?'left':'right']:0,width:`${Math.min(100,barW)}%`,height:'100%',background:isPos?'#26a69a':'#ef5350',borderRadius:2}}/>
+                          </div>
+                          <span style={{fontSize:9,color:'#d1d4dc',minWidth:28,textAlign:'right'}}>{f.v>0?'+':''}{Math.round(f.v||0)}</span>
+                          <span style={{fontSize:9,color:accColor,minWidth:32,textAlign:'right'}} title={f.acc!=null?`${f.acc}% accuracy (last ${_modAccStats[f.n]?.total||0} candles)`:'Not enough data'}>
+                            {f.acc!=null?`${f.acc}%`:'—'}
+                          </span>
+                          <span style={{fontSize:8,color:'#555',minWidth:26,textAlign:'right'}}>{(f.w*100).toFixed(0)}%w</span>
                         </div>
-                        <span style={{fontSize:10,fontWeight:600,color:f.v>0?'#26a69a':f.v<0?'#ef5350':'#787b86',minWidth:32,textAlign:'right'}}>{f.v>0?'+':''}{Math.round(f.v)}</span>
-                        <span style={{fontSize:9,color:'#787b86',minWidth:28}}>{Math.round(f.w*100)}%</span>
+                      );
+                    })}
+                    {Object.values(_modAccStats).some(s=>s.total>=10)&&(
+                      <div style={{fontSize:9,color:'#555',marginTop:6,borderTop:'1px solid #1e222d',paddingTop:4}}>
+                        🤖 Weights are self-adjusting based on live accuracy. Best module: {
+                          Object.entries(_modAccStats)
+                            .filter(([,s])=>s.total>=10)
+                            .sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[0]||'—'
+                        } ({Math.round((Object.entries(_modAccStats).filter(([,s])=>s.total>=10).sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[1]?.correct/Object.entries(_modAccStats).filter(([,s])=>s.total>=10).sort(([,a],[,b])=>b.correct/b.total-a.correct/a.total)[0]?.[1]?.total*100)||0}%)
                       </div>
-                    ))}
+                    )}
                   </div>
                 </>)}
               </Section>
