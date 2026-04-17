@@ -1017,6 +1017,56 @@ async function fetchIntermarketData(cryptoAsset){
     return{dxyChg:chg(res[0]),spxChg:chg(res[1]),goldChg:chg(res[2]),btcDom:btcDom?parseFloat(btcDom).toFixed(1):null};
   }catch(_){return null;}
 }
+// ─── PDH / PDL ────────────────────────────────────────────────────────────────
+async function fetchPDHL(symbol){
+  const sym=symbol.replace('/','');
+  try{
+    const r=await fetch(`${BINANCE_FAPI}/klines?symbol=${sym}&interval=1d&limit=3`);
+    if(!r.ok) return null;
+    const klines=await r.json();
+    if(!klines||klines.length<2) return null;
+    const pdh=parseFloat(klines[klines.length-2][2]);
+    const pdl=parseFloat(klines[klines.length-2][3]);
+    if(!pdh||!pdl) return null;
+    return{pdh,pdl,sweptH:false,sweptL:false};
+  }catch(_){return null;}
+}
+
+// ─── LONG / SHORT RATIO ───────────────────────────────────────────────────────
+async function fetchLSRatio(symbol){
+  const sym=symbol.replace('/','');
+  try{
+    const r=await fetch(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=5m&limit=1`);
+    if(!r.ok) return null;
+    const d=await r.json();
+    if(!d||!d.length) return null;
+    const longPct=parseFloat(d[0].longAccount)*100;
+    const shortPct=parseFloat(d[0].shortAccount)*100;
+    return{longPct,shortPct,ratio:parseFloat(d[0].longShortRatio)};
+  }catch(_){return null;}
+}
+
+// ─── RELATIVE STRENGTH vs BTC ─────────────────────────────────────────────────
+async function fetchBTCRef(tf,limit=25){
+  try{
+    const iv=BINANCE_TF[tf]||'1h';
+    const r=await fetch(`${BINANCE_FAPI}/klines?symbol=BTCUSDT&interval=${iv}&limit=${limit}`);
+    if(!r.ok) return null;
+    return parseKlines(await r.json());
+  }catch(_){return null;}
+}
+function calcRS(coinCandles,btcCandles,lookback=20){
+  if(!coinCandles||!btcCandles||coinCandles.length<lookback||btcCandles.length<lookback) return null;
+  const cStart=coinCandles[coinCandles.length-lookback].close;
+  const cEnd=coinCandles[coinCandles.length-1].close;
+  const bStart=btcCandles[btcCandles.length-lookback].close;
+  const bEnd=btcCandles[btcCandles.length-1].close;
+  const coinChg=((cEnd-cStart)/cStart)*100;
+  const btcChg=((bEnd-bStart)/bStart)*100;
+  const rs=coinChg-btcChg;
+  return{coinChg,btcChg,rs,signal:rs>1?'STRONG':rs<-1?'WEAK':'NEUTRAL'};
+}
+
 function futureCandlesSim(candles,signal,atr,count,ctx){
   // ctx = {momScore, microScore, vpData, macd, squeeze, rsiVal, bbData, cmf, stoch}
   const p0=candles[candles.length-1].close;
@@ -2433,6 +2483,9 @@ const App=()=>{
   const[nnResult,setNnResult]=useState(null);
   const[fsConnected,setFsConnected]=useState(false);
   const[nnTraining,setNnTraining]=useState(false);
+  const[pdhl,setPdhl]=useState(null);
+  const[lsRatio,setLsRatio]=useState(null);
+  const[rsData,setRsData]=useState(null);
 
   // Indicator toggles — persisted to localStorage
   const[indOn,setIndOn]=useState(()=>{
@@ -2453,6 +2506,8 @@ const App=()=>{
   };
 
   const chartRef=useRef(null),chartInst=useRef(null),cSeries=useRef(null),vSeries=useRef(null),wsRef=useRef(null),searchRef=useRef(null),vpLinesRef=useRef([]),vpCanvasRef=useRef(null);
+  const pdhLineRef=useRef(null);
+  const pdlLineRef=useRef(null);
   const indSeriesRef=useRef({}); // holds all indicator series {bb1,bb2,bb3,vwap,ema200,...}
   const newsStore=useRef([]); // persistent accumulator — keeps up to 200 items across refreshes
 
@@ -2732,6 +2787,30 @@ const App=()=>{
       setCandles(fullData);
       const s=generateSetup(fullData,liveClose);
       setSetup(s);
+      // ── PDH / PDL ──
+      if(isCrypto(sym)){
+        const pdhlData=await fetchPDHL(sym);
+        if(pdhlData){
+          const last5=fullData.slice(-5);
+          pdhlData.sweptH=last5.some(c=>c.high>pdhlData.pdh);
+          pdhlData.sweptL=last5.some(c=>c.low<pdhlData.pdl);
+          setPdhl(pdhlData);
+        }else{
+          setPdhl(null);
+        }
+        // ── Long/Short Ratio ──
+        const ls=await fetchLSRatio(sym);
+        setLsRatio(ls);
+        // ── Relative Strength vs BTC ──
+        if(sym!=='BTCUSDT'&&sym!=='BTC/USDT'){
+          const btcRef=await fetchBTCRef(t,25);
+          setRsData(calcRS(fullData,btcRef));
+        }else{
+          setRsData(null);
+        }
+      }else{
+        setPdhl(null);setLsRatio(null);setRsData(null);
+      }
       // ── Deep Learning Supervisor: self-correct → train → predict ──
       if(!quiet){
         setNnTraining(true);
@@ -2797,6 +2876,13 @@ const App=()=>{
     if(im.status==='fulfilled') setIntermarket(im.value);
   },[]);
 
+  // LS Ratio refresh every 5 minutes
+  useEffect(()=>{
+    if(!isCrypto(symbol)) return;
+    const id=setInterval(()=>fetchLSRatio(symbol).then(setLsRatio),5*60*1000);
+    return()=>clearInterval(id);
+  },[symbol]);
+
   useEffect(()=>{
     setOiFunding(null);setFearGreed(null);setIntermarket(null);
     loadFundamentals(symbol);
@@ -2851,6 +2937,18 @@ const App=()=>{
       if(vp.val!=null) vpLinesRef.current.push(cSeries.current.createPriceLine({price:vp.val,color:'#ef5350',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'VAL'}));
     }catch(_){}
   },[setup]);
+
+  // PDH / PDL price lines
+  useEffect(()=>{
+    if(!cSeries.current) return;
+    try{if(pdhLineRef.current){cSeries.current.removePriceLine(pdhLineRef.current);pdhLineRef.current=null;}}catch(_){}
+    try{if(pdlLineRef.current){cSeries.current.removePriceLine(pdlLineRef.current);pdlLineRef.current=null;}}catch(_){}
+    if(!pdhl) return;
+    try{
+      if(pdhl.pdh!=null) pdhLineRef.current=cSeries.current.createPriceLine({price:pdhl.pdh,color:'#ef5350',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'PDH'});
+      if(pdhl.pdl!=null) pdlLineRef.current=cSeries.current.createPriceLine({price:pdhl.pdl,color:'#26a69a',lineWidth:1,lineStyle:2,axisLabelVisible:true,title:'PDL'});
+    }catch(_){}
+  },[pdhl]);
 
   // VP canvas drawing function — extracted so it can be called on EVERY viewport change
   const drawVPCanvas=useCallback(()=>{
@@ -3264,6 +3362,61 @@ const App=()=>{
                     <span style={{fontSize:10,fontWeight:700,color:aiAdjustedBias.mlConf>75?'#26a69a':aiAdjustedBias.mlConf>50?'#ff9800':'#ef5350'}}>{aiAdjustedBias.mlConf}%</span>
                   </div>
                   {aiAdjustedBias.mlConf>=75&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ High-probability setup</p>}
+                </div>
+              )}
+
+              {/* ── PDH / PDL ── */}
+              {pdhl && (
+                <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:4}}>PDH / PDL</div>
+                  <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                    <span style={{color:'#ef5350'}}>PDH {pdhl.pdh?.toFixed(4)}</span>
+                    {pdhl.sweptH && <span style={{background:'#ef5350',color:'#fff',borderRadius:3,padding:'1px 5px',fontSize:9,fontWeight:700}}>SWEPT ⚡</span>}
+                  </div>
+                  <div style={{display:'flex',gap:8,alignItems:'center',marginTop:3}}>
+                    <span style={{color:'#26a69a'}}>PDL {pdhl.pdl?.toFixed(4)}</span>
+                    {pdhl.sweptL && <span style={{background:'#26a69a',color:'#fff',borderRadius:3,padding:'1px 5px',fontSize:9,fontWeight:700}}>SWEPT ⚡</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* ── LONG / SHORT RATIO ── */}
+              {lsRatio && (
+                <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:6}}>LONG / SHORT RATIO</div>
+                  <div style={{display:'flex',gap:4,alignItems:'center',marginBottom:4}}>
+                    <div style={{flex:lsRatio.longPct,background:'#26a69a',height:6,borderRadius:3,transition:'flex .5s'}}/>
+                    <div style={{flex:lsRatio.shortPct,background:'#ef5350',height:6,borderRadius:3,transition:'flex .5s'}}/>
+                  </div>
+                  <div style={{display:'flex',justifyContent:'space-between'}}>
+                    <span style={{color:'#26a69a'}}>Long {lsRatio.longPct.toFixed(1)}%</span>
+                    <span style={{color:'#ef5350'}}>Short {lsRatio.shortPct.toFixed(1)}%</span>
+                  </div>
+                  {lsRatio.longPct>65&&<div style={{marginTop:4,color:'#ffb74d',fontSize:10}}>⚠ Crowd &gt;65% Long — bearish lean</div>}
+                  {lsRatio.shortPct>65&&<div style={{marginTop:4,color:'#26a69a',fontSize:10}}>⚠ Crowd &gt;65% Short — bullish lean</div>}
+                </div>
+              )}
+
+              {/* ── RELATIVE STRENGTH vs BTC ── */}
+              {rsData && (
+                <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:4}}>RELATIVE STRENGTH vs BTC</div>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                    <div>
+                      <div style={{color:'#aaa',fontSize:10}}>Coin {rsData.coinChg>=0?'+':''}{rsData.coinChg.toFixed(2)}%</div>
+                      <div style={{color:'#aaa',fontSize:10}}>BTC {rsData.btcChg>=0?'+':''}{rsData.btcChg.toFixed(2)}%</div>
+                    </div>
+                    <div style={{textAlign:'right'}}>
+                      <div style={{fontSize:16,fontWeight:700,color:rsData.rs>1?'#26a69a':rsData.rs<-1?'#ef5350':'#888'}}>
+                        {rsData.rs>=0?'+':''}{rsData.rs.toFixed(2)}%
+                      </div>
+                      <div style={{fontSize:10,fontWeight:700,color:rsData.rs>1?'#26a69a':rsData.rs<-1?'#ef5350':'#888'}}>
+                        {rsData.signal==='STRONG'?'💪 OUTPERFORMING':rsData.signal==='WEAK'?'📉 UNDERPERFORMING':'➡ IN LINE'}
+                      </div>
+                    </div>
+                  </div>
+                  {rsData.rs>2&&<div style={{marginTop:4,color:'#26a69a',fontSize:10}}>✓ Coin refuses to drop — Long candidate</div>}
+                  {rsData.rs<-2&&<div style={{marginTop:4,color:'#ef5350',fontSize:10}}>✓ Coin refuses to pump — Short candidate</div>}
                 </div>
               )}
 
