@@ -647,6 +647,118 @@ const _NN_NEWS_KEY='smc_deep_news_v7'; // news→price reaction memory
 const _NN_POOL_KEY='smc_nn_pool_v1';   // cross-TF training pool — accumulates examples from ALL timeframes
 const _NN_POOL_MAX=3000;               // rolling cap: keeps localStorage under ~4 MB
 
+// ── TF → milliseconds ─────────────────────────────────────────────────────────
+// Used everywhere we need to know when the next candle forms.
+const _TF_MS={'1m':60000,'3m':180000,'5m':300000,'15m':900000,'30m':1800000,
+              '1h':3600000,'2h':7200000,'4h':14400000,'6h':21600000,'8h':28800000,
+              '12h':43200000,'1d':86400000,'3d':259200000,'1w':604800000};
+
+// ── Cross-window NN sync ──────────────────────────────────────────────────────
+// Multiple browser windows open on different coins/TFs all share ONE trained model.
+// BroadcastChannel is the fast path; StorageEvent is the Safari fallback.
+let _nnChannel=null;
+try{_nnChannel=new BroadcastChannel('smc_nn_sync');}catch(_){}
+if(_nnChannel){
+  _nnChannel.onmessage=e=>{
+    if(!e?.data) return;
+    if(e.data.type==='nn_trained'){
+      // Another window just finished training — absorb its weights immediately
+      try{
+        if(e.data.weights&&JSON.stringify(e.data.weights.layers)===JSON.stringify(NN_LAYERS)){
+          _nnInst=NeuralNet.fromJSON(e.data.weights);
+        }
+        if(e.data.stats) Object.assign(_nnStats,e.data.stats);
+      }catch(_2){}
+    }
+    if(e.data.type==='candle_closed'){
+      // Another window detected a new candle closed — validate our pending predictions silently
+      try{
+        const{symbol:s,tf:t}=e.data;
+        if(s&&t) fetchCandles(s,t,100).then(c=>{if(c&&c.length>2) validatePendingPredictions(c,s,t);}).catch(()=>{});
+      }catch(_2){}
+    }
+  };
+}
+// Safari / Firefox fallback: storage event fires when another tab writes to localStorage
+if(typeof window!=='undefined'){
+  window.addEventListener('storage',e=>{
+    if(e.key===_NN_KEY&&e.newValue){
+      _nnInst=null; // force lazy-reload from storage on next inference
+      try{const s=localStorage.getItem(_NN_STATS_KEY);if(s)Object.assign(_nnStats,JSON.parse(s));}catch(_){}
+    }
+  });
+}
+
+// ── Window registry ───────────────────────────────────────────────────────────
+// Every open tab writes {symbol, tf} so background validators in OTHER tabs know
+// what to check even when the user isn't looking at that tab.
+const _WIN_REGISTRY_KEY='smc_win_reg_v1';
+const _WINDOW_ID=(()=>{
+  let id=sessionStorage.getItem('smc_wid');
+  if(!id){id=Math.random().toString(36).slice(2,10);sessionStorage.setItem('smc_wid',id);}
+  return id;
+})();
+function _registerWindow(symbol,tf){
+  try{
+    const reg=JSON.parse(localStorage.getItem(_WIN_REGISTRY_KEY)||'{}');
+    const now=Date.now();
+    reg[_WINDOW_ID]={symbol,tf,lastSeen:now};
+    // Prune stale entries (>15 min = tab is closed or idle)
+    for(const id of Object.keys(reg)){if(now-(reg[id]?.lastSeen||0)>15*60*1000)delete reg[id];}
+    localStorage.setItem(_WIN_REGISTRY_KEY,JSON.stringify(reg));
+  }catch(_){}
+}
+function _getOtherWindowCharts(){
+  try{
+    const reg=JSON.parse(localStorage.getItem(_WIN_REGISTRY_KEY)||'{}');
+    const now=Date.now();
+    return Object.entries(reg)
+      .filter(([id,e])=>id!==_WINDOW_ID&&e&&now-(e.lastSeen||0)<15*60*1000)
+      .map(([,e])=>({symbol:e.symbol,tf:e.tf}));
+  }catch(_){return[];}
+}
+
+// ── Next-candle auto-validation scheduler ────────────────────────────────────
+// For every chart opened, we compute exactly when the next candle will close and
+// schedule a one-shot timer. When it fires we fetch, validate ghost candle
+// accuracy (direction + body size + range), retrain if wrong, then re-schedule.
+// This continues indefinitely even when the user is on a different tab/window.
+const _nextCandleTimers={}; // {symbol|tf: timeoutId}
+async function _validateAndReschedule(symbol,tf){
+  try{
+    const fresh=await fetchCandles(symbol,tf,120);
+    if(!fresh||fresh.length<2) return;
+    const res=validatePendingPredictions(fresh,symbol,tf);
+    if(res.validated>0){
+      validateNewsReactions(fresh,symbol);
+      // Immediately retrain with any new correction data
+      const tr=trainNNOnCandles(fresh);
+      if(tr){
+        try{if(_nnChannel)_nnChannel.postMessage({type:'nn_trained',weights:_getNN().toJSON(),stats:{..._nnStats}});}catch(_){}
+      }
+      try{if(_nnChannel)_nnChannel.postMessage({type:'candle_closed',symbol,tf});}catch(_){}
+    }
+    // Re-schedule for the NEXT candle after this one
+    scheduleNextCandleValidation(symbol,tf,fresh);
+  }catch(_2){}
+}
+function scheduleNextCandleValidation(symbol,tf,candles){
+  if(!symbol||!tf||!candles||candles.length<2) return;
+  const key=`${symbol}|${tf}`;
+  if(_nextCandleTimers[key]) clearTimeout(_nextCandleTimers[key]);
+  const tfMs=_TF_MS[tf]||0;
+  if(!tfMs) return;
+  const lastTs=candles[candles.length-1].timestamp;
+  const nextAt=lastTs+tfMs;
+  const waitMs=nextAt-Date.now()+4000; // 4s grace period for Binance API lag
+  if(waitMs<=500){
+    // Next candle may have already closed — validate immediately then reschedule
+    _validateAndReschedule(symbol,tf);
+    return;
+  }
+  _nextCandleTimers[key]=setTimeout(()=>_validateAndReschedule(symbol,tf),waitMs);
+}
+
 // Feature vector size per candle: 12 → 8-candle window = 96 inputs
 const SEQ_LEN=8;
 const FEATURES_PER_CANDLE=12;
@@ -875,6 +987,8 @@ function trainNNOnCandles(candles){
     localStorage.setItem(_NN_KEY,JSON.stringify(net.toJSON()));
     localStorage.setItem(_NN_STATS_KEY,JSON.stringify(_nnStats));
   }catch(_2){}
+  // Broadcast new weights to ALL other open windows so they benefit immediately
+  try{if(_nnChannel)_nnChannel.postMessage({type:'nn_trained',weights:net.toJSON(),stats:{..._nnStats}});}catch(_){}
   return{accuracy:_nnStats.accuracy,totalCandles:_nnStats.totalCandles,sessions:_nnStats.sessions,batchSize:data.length,poolSize:pool.length,corrections:_nnStats.corrections};
 }
 
@@ -893,16 +1007,19 @@ function runNNPredict(candles,symbol,tf){
     if(symbol&&tf){
       try{
         const pending=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
+        const tfMs=_TF_MS[tf]||0;
+        const anchorTs=candles[candles.length-1].timestamp;
         pending.push({
           ts:Date.now(),symbol,tf,
           input:inp,
           prediction:[prob,magnitude,volatility],
           anchorPrice:candles[candles.length-1].close,
-          anchorTime:candles[candles.length-1].timestamp,
+          anchorTime:anchorTs,
+          nextCandleTime:tfMs>0?anchorTs+tfMs:0, // exact time next candle should open
           validated:false
         });
-        // Keep last 500 pending predictions
-        if(pending.length>500) pending.splice(0,pending.length-500);
+        // Keep last 600 pending predictions (more room for multi-window scenarios)
+        if(pending.length>600) pending.splice(0,pending.length-600);
         localStorage.setItem(_NN_OUTCOMES_KEY,JSON.stringify(pending));
       }catch(_2){}
     }
@@ -912,8 +1029,10 @@ function runNNPredict(candles,symbol,tf){
       corrections:_nnStats.corrections,newsLogged:_nnStats.newsLogged,
       recentAcc:_nnStats.recentTotal?Math.round(_nnStats.recentCorrect/_nnStats.recentTotal*100):null,
       immediateRetrains:_nnStats.immediateRetrains||0,
-      poolSize:_nnStats.poolSize||0, // cross-TF training pool size
+      poolSize:_nnStats.poolSize||0,
       totalValidated:_nnStats.totalValidated||0,
+      sizeCorrections:_nnStats.sizeCorrections||0,
+      avgMagError:_nnStats.magErrorCount>0?Math.round(_nnStats.magErrorSum/_nnStats.magErrorCount*100)/100:null,
       expectedMove:Math.round(magnitude*100)/100,  // 0-1 scaled move
       expectedVol:Math.round(volatility*100)/100
     };
@@ -943,15 +1062,36 @@ function validatePendingPredictions(candles,symbol,tf){
       const actualMag=Math.min(1,Math.abs(nextC.close-anchorC.close)/(atr*2||1));
       const actualVol=Math.min(1,(nextC.high-nextC.low)/(atr*3||1));
       const predDir=p.prediction[0]>=0.5?1:0;
+      const predMag=p.prediction[1]||0;
+      const predVol=p.prediction[2]||0;
+      // Ghost candle body accuracy: how far off was the predicted body size?
+      // Error >60% = model was badly wrong on magnitude or volatility
+      const magErr=Math.abs(predMag-actualMag)/(actualMag||0.05);
+      const volErr=Math.abs(predVol-actualVol)/(actualVol||0.05);
+      const sizeWrong=magErr>0.60||volErr>0.60;
       p.validated=true;
       p.actualDir=actualDir;
       p.actualLabels=[actualDir,actualMag,actualVol];
       p.wrongDirection=predDir!==actualDir;
+      p.magnitudeError=Math.round(magErr*100)/100;  // 0 = perfect, 1 = 100% off
+      p.volatilityError=Math.round(volErr*100)/100;
+      p.sizeWrong=sizeWrong;
       validated++;
       if(p.wrongDirection){
         wrong++;_nnStats.corrections++;
+        // Direction wrong → retrain at 5× weight (hardest penalty)
         if(p.input&&p.actualLabels) wrongSamples.push({input:p.input,output:p.actualLabels,weight:5});
-      }else correct++;
+      }else{
+        correct++;
+        // Direction right but body/range size badly off → retrain at 3× weight
+        if(sizeWrong&&p.input&&p.actualLabels){
+          wrongSamples.push({input:p.input,output:p.actualLabels,weight:3});
+          _nnStats.sizeCorrections=(_nnStats.sizeCorrections||0)+1;
+        }
+      }
+      // Track rolling magnitude accuracy (separate from direction accuracy)
+      _nnStats.magErrorSum=(_nnStats.magErrorSum||0)+magErr;
+      _nnStats.magErrorCount=(_nnStats.magErrorCount||0)+1;
     }
     if(validated>0){
       _nnStats.correctPredictions+=correct;
@@ -3046,38 +3186,69 @@ const App=()=>{
     });
   },[]);
 
-  // Background validation — throttled: runs at most once per 5 minutes,
-  // processes max 5 symbols per run, 500ms apart to stay off the API radar.
+  // Background validation — throttled to once per 5 min to avoid API flooding.
+  // Validates ALL pending predictions regardless of which window made them:
+  //   1) Symbols from other open windows (via window registry)
+  //   2) Symbols from pending predictions not yet validated
+  //   3) Symbols whose nextCandleTime has already passed
   const _bgValidateLastRun=React.useRef(0);
-  const backgroundValidateAll=useCallback(async(currentSym,currentTf)=>{
+  const backgroundValidateAll=useCallback(async(currentSym,currentTf,force=false)=>{
     const now=Date.now();
-    if(now-_bgValidateLastRun.current<5*60*1000) return; // 5-min cooldown
+    if(!force&&now-_bgValidateLastRun.current<5*60*1000) return; // 5-min cooldown
     _bgValidateLastRun.current=now;
     try{
       const pending=JSON.parse(localStorage.getItem(_NN_OUTCOMES_KEY)||'[]');
       const seen=new Set();
       const toCheck=[];
+
+      // Priority 1: overdue predictions (nextCandleTime already passed)
+      for(const p of pending){
+        if(p.validated) continue;
+        if(p.nextCandleTime&&p.nextCandleTime>0&&now>p.nextCandleTime+5000){
+          const key=`${p.symbol}|${p.tf}`;
+          if(!seen.has(key)&&(p.symbol!==currentSym||p.tf!==currentTf)){
+            seen.add(key);toCheck.push({symbol:p.symbol,tf:p.tf});
+          }
+        }
+        if(toCheck.length>=4) break;
+      }
+
+      // Priority 2: other windows' currently viewed charts
+      for(const{symbol,tf}of _getOtherWindowCharts()){
+        const key=`${symbol}|${tf}`;
+        if(!seen.has(key)&&(symbol!==currentSym||tf!==currentTf)&&toCheck.length<8){
+          seen.add(key);toCheck.push({symbol,tf});
+        }
+      }
+
+      // Priority 3: any remaining unvalidated pending predictions
       for(const p of pending){
         if(p.validated) continue;
         const key=`${p.symbol}|${p.tf}`;
         if(seen.has(key)) continue;
         if(p.symbol===currentSym&&p.tf===currentTf) continue;
-        seen.add(key);
-        toCheck.push({symbol:p.symbol,tf:p.tf});
-        if(toCheck.length>=5) break; // cap at 5 per run — prevents API flood
+        seen.add(key);toCheck.push({symbol:p.symbol,tf:p.tf});
+        if(toCheck.length>=10) break; // cap total at 10 per run
       }
+
       if(!toCheck.length) return;
+      let anyValidated=false;
       for(const {symbol,tf} of toCheck){
-        await new Promise(r=>setTimeout(r,500)); // 500ms gap — less aggressive
+        await new Promise(r=>setTimeout(r,500)); // 500ms gap between API calls
         try{
-          const candles=await fetchCandles(symbol,tf,80); // 80 candles is enough
+          const candles=await fetchCandles(symbol,tf,120);
           if(candles&&candles.length>10){
             const res=validatePendingPredictions(candles,symbol,tf);
-            if(res.validated>0) validateNewsReactions(candles,symbol);
+            if(res.validated>0){
+              validateNewsReactions(candles,symbol);
+              anyValidated=true;
+              // Reschedule next-candle timer now that we have fresh data
+              scheduleNextCandleValidation(symbol,tf,candles);
+            }
           }
         }catch(_2){}
       }
-      await fsSaveModel();
+      if(anyValidated) await fsSaveModel();
     }catch(_2){}
   },[]);
 
@@ -3102,6 +3273,10 @@ const App=()=>{
       // Full candle fetch needed when new candle formed or non-quiet load
       const fullData=quiet?await fetchCandles(sym,t,600):data;
       setCandles(fullData);
+      // Register this window in the shared registry so other windows know what we're watching
+      _registerWindow(sym,t);
+      // Schedule auto-validation exactly when the next candle closes
+      scheduleNextCandleValidation(sym,t,fullData);
       const s=generateSetup(fullData,liveClose);
       setSetup(s);
       // ── PDH / PDL ──
@@ -3173,6 +3348,21 @@ const App=()=>{
     const id=setInterval(()=>load(symbol,tf,true),30000);
     return()=>clearInterval(id);
   },[symbol,tf]);
+
+  // Page Visibility: when user switches back to this tab, any candles that closed
+  // while hidden may need validation. Force a background validate immediately.
+  useEffect(()=>{
+    const onVisible=()=>{
+      if(!document.hidden){
+        // Refresh window registry heartbeat so other tabs know we're alive
+        _registerWindow(symbol,tf);
+        // Skip the 5-min cooldown — validate right now (candles may have formed while hidden)
+        backgroundValidateAll(symbol,tf,true);
+      }
+    };
+    document.addEventListener('visibilitychange',onVisible);
+    return()=>document.removeEventListener('visibilitychange',onVisible);
+  },[symbol,tf,backgroundValidateAll]);
 
   // MTF VP load
   useEffect(()=>{
@@ -3819,9 +4009,10 @@ const App=()=>{
                     </div>
                     {nnResult.immediateRetrains>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>⚡ Immediate self-correction fired <b>{nnResult.immediateRetrains}</b>× — model retrained on its mistakes in real-time.</p>}
                     {nnResult.accuracy>=55&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ Model beating random baseline (50%). Self-correction active.</p>}
-                    {nnResult.totalCandles<1000&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>⚡ Still early learning — switch symbols & timeframes to feed all TF data.</p>}
-                    {nnResult.corrections>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>🔧 Auto-corrected <b>{nnResult.corrections}</b> past mistakes with 5× weight re-training.</p>}
-                    {(nnResult.poolSize||0)>0&&<p style={{fontSize:9,color:'#26a69a',marginTop:2}}>🗄 Cross-TF pool: <b>{(nnResult.poolSize||0).toLocaleString()}</b> examples from all visited timeframes — model generalizes beyond current TF.</p>}
+                    {nnResult.totalCandles<1000&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>⚡ Still early learning — open multiple windows on different coins & TFs to feed data faster.</p>}
+                    {nnResult.corrections>0&&<p style={{fontSize:9,color:'#ab47bc',marginTop:2}}>🔧 Direction wrong: <b>{nnResult.corrections}</b>× (5× weight retrain) | Body size wrong: <b>{nnResult.sizeCorrections||0}</b>× (3× weight retrain)</p>}
+                    {(nnResult.poolSize||0)>0&&<p style={{fontSize:9,color:'#26a69a',marginTop:2}}>🗄 Cross-TF pool: <b>{(nnResult.poolSize||0).toLocaleString()}</b> examples — every window/tab/TF feeds this model continuously.</p>}
+                    {(nnResult.avgMagError||0)>0&&<p style={{fontSize:9,color:(nnResult.avgMagError||0)<0.4?'#26a69a':'#ff9800',marginTop:2}}>📏 Avg ghost candle size error: <b>{Math.round((nnResult.avgMagError||0)*100)}%</b> {(nnResult.avgMagError||0)<0.4?'— body size predictions accurate':'— still calibrating body size'}</p>}
                   </>
                 ):(
                   <div style={{textAlign:'center',padding:'8px 0'}}>
