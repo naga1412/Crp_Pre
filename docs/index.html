@@ -2737,6 +2737,10 @@ function ScannerTab({onNavigate,binanceSymbols}){
   const[filterTf,setFilterTf]=useState('1h');
   const[searchQ,setSearchQ]=useState('');
   const[scanType,setScanType]=useState('crypto'); // crypto (default), all, stocks
+  // ── Hybrid Supervisor state ──
+  const[dsAnalyzing,setDsAnalyzing]=useState(false);   // DeepSeek batch in progress
+  const[dsQueue,setDsQueue]=useState({done:0,total:0}); // progress counter
+  const[marketSummary,setMarketSummary]=useState(null); // DeepSeek market overview
   const[filterConf,setFilterConf]=useState('all'); // all, CONFIRMED, PROBABLE, WEAK, DIVERGING
   const[favInput,setFavInput]=useState('');
   const[favorites,setFavorites]=useState(()=>{try{return JSON.parse(localStorage.getItem('smc_favorites')||'[]');}catch(_){return[];}});
@@ -2834,18 +2838,36 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const chg24=c24?((price-c24)/c24*100):0;
       const spark=data.slice(-20).map(c=>c.close);
       const topSignals=(master?.features||[]).slice(0,3).map(f=>({name:f.n,value:Math.round(f.v),weight:Math.round(f.w*100)}));
+      const allModules=(master?.features||[]).map(f=>({name:f.n,value:Math.round(f.v),weight:Math.round(f.w*100)}));
       // NN inference (uses pre-trained model — fast, no training during scan)
       const nnPred=runNNPredict(data);
+      // ── AI-adjusted score: blend master bias with NN output (mirrors aiAdjustedBias in main chart) ──
+      let aiScore=score,aiSignal=masterSignal,aiOverride=false,aiAgrees=false;
+      if(nnPred&&_nnStats.totalCandles>=150){
+        const nnProb=nnPred.prob??0.5;
+        const nnBull=nnProb>=0.54;const nnBear=nnProb<=0.46;
+        const nnDir=nnBull?1:nnBear?-1:0;
+        const sigDir=score>=10?1:score<=-10?-1:0;
+        const nnConf=Math.abs(nnProb-0.5)*2;               // 0-1 directional confidence
+        const nnAccFactor=(nnPred.accuracy||50)/100;        // model rolling accuracy 0-1
+        const nnWeight=Math.min(0.35,nnConf*nnAccFactor*0.50); // max 35% NN influence
+        const nnContrib=Math.round((nnBull?60:nnBear?-60:0)*nnWeight);
+        aiScore=Math.max(-100,Math.min(100,Math.round(score*(1-nnWeight))+nnContrib));
+        aiAgrees=nnDir===0||nnDir===sigDir;
+        aiOverride=!aiAgrees&&nnConf>0.30&&nnAccFactor>0.55; // NN strongly disagrees with high accuracy
+        aiSignal=aiScore>=10?'LONG':aiScore<=-10?'SHORT':'NEUTRAL';
+      }
       return{
         symbol:sym,type,price,
-        score,label:master?.label||'Neutral',color:master?.color||'#787b86',
+        score,aiScore,aiSignal,aiOverride,aiAgrees, // both raw and NN-adjusted scores
+        label:master?.label||'Neutral',color:master?.color||'#787b86',
         mlConf:master?.mlConf||0,
         signal:masterSignal,
         htfBias:setup.htf_bias,phase:setup.phase,
         htfSignal,htfScore,htfPhase,higherTf,mtfAgrees,
         confirmation,confirmColor,
         chg24:chg24.toFixed(2),
-        spark,topSignals,
+        spark,topSignals,allModules,
         nnSignal:nnPred?.signal||null,nnConf:nnPred?.confidence||0,nnProb:nnPred?.prob||null,
         strongestTf:filterTf,
         ts:Date.now()
@@ -2899,7 +2921,96 @@ function ScannerTab({onNavigate,binanceSymbols}){
     setLastScan(new Date());
     setScanning(false);
     scanRef.current=false;
+    // ── Launch Hybrid Supervisor analysis on top picks after scan ──
+    runHybridAnalysis(results).catch(()=>{});
   },[scanAsset,scanType,binanceSymbols,favorites,scanLimit]);
+
+  // ── Hybrid Supervisor: DeepSeek evaluates top scan picks + generates market overview ──
+  // Runs AFTER scan completes — doesn't block scanning. Only fires when DeepSeek is selected.
+  const runHybridAnalysis=useCallback(async(results)=>{
+    const provider=localStorage.getItem('smc_ai_provider')||'deepseek';
+    if(provider!=='deepseek') return;
+    if(!results||results.length===0) return;
+
+    // Pick top candidates: CONFIRMED first, then PROBABLE, sorted by |aiScore|, max 8
+    const candidates=[
+      ...results.filter(r=>r.confirmation==='CONFIRMED'),
+      ...results.filter(r=>r.confirmation==='PROBABLE'),
+    ].sort((a,b)=>Math.abs(b.aiScore||b.score)-Math.abs(a.aiScore||a.score)).slice(0,8);
+
+    if(candidates.length===0) return;
+    setDsAnalyzing(true);
+    setDsQueue({done:0,total:candidates.length});
+    setMarketSummary(null);
+
+    const updated=[...results];
+
+    for(let i=0;i<candidates.length;i++){
+      const r=candidates[i];
+      // Compact prompt — keep it short so DeepSeek responds in <15s per asset
+      const modStr=(r.topSignals||[]).map(s=>`${s.name}${s.value>=0?'+':''}${s.value}`).join(' ');
+      const promptAsset=`${r.symbol} ${filterTf} | Signal:${r.signal} | AI Score:${(r.aiScore||r.score)>=0?'+':''}${r.aiScore||r.score} | Conf:${r.mlConf}% | Phase:${r.phase}
+HTF(${r.higherTf||'?'}):${r.htfSignal||'?'} | Confirmation:${r.confirmation} | NN:${r.nnProb!=null?Math.round(r.nnProb*100)+'%bull':'?'} conf:${r.nnConf||0}% | 24h:${r.chg24}%
+Modules: ${modStr} | AIOverride:${r.aiOverride?'YES':'no'} | MTFagree:${r.mtfAgrees?'yes':'NO'}
+Return ONLY this JSON (no prose): {"signal":"LONG or SHORT or NEUTRAL","dsScore":-60 to +60,"conviction":0 to 100,"reason":"max 12 words","quality":"A or B or C or D"}`;
+      try{
+        const res=await callOllamaJSON(
+          'You are a trading signal validator. Validate if this setup is high quality. Return ONLY valid JSON.',
+          promptAsset,160
+        );
+        if(res&&res.dsScore!=null){
+          const idx=updated.findIndex(u=>u.symbol===r.symbol);
+          if(idx>=0){
+            const ai=updated[idx].aiScore||updated[idx].score;
+            const ds=Math.max(-60,Math.min(60,res.dsScore||0));
+            const aiDir=ai>=10?1:ai<=-10?-1:0;
+            const dsDir=ds>=8?1:ds<=-8?-1:0;
+            const agree=(aiDir===dsDir)||(aiDir===0)||(dsDir===0);
+            const conflict=!agree&&aiDir!==0&&dsDir!==0;
+            let hybrid=Math.round(ai*0.65+ds*0.35);
+            if(agree&&aiDir!==0) hybrid=Math.round(hybrid*1.10);
+            if(conflict) hybrid=Math.round(hybrid*0.70);
+            hybrid=Math.max(-100,Math.min(100,hybrid));
+            const hybridSignal=hybrid>=10?'LONG':hybrid<=-10?'SHORT':'NEUTRAL';
+            updated[idx]={
+              ...updated[idx],
+              dsSignal:res.signal,dsScore:ds,dsConviction:res.conviction||50,
+              dsReason:res.reason||'',dsQuality:res.quality||'B',
+              hybridScore:hybrid,hybridSignal,
+              hybridAgree:agree,hybridConflict:conflict,
+              hybridDone:true,
+            };
+            setScanResults([...updated]);
+          }
+        }
+      }catch(_){}
+      setDsQueue({done:i+1,total:candidates.length});
+      // Brief pause between calls — avoid Ollama GPU OOM
+      await new Promise(res=>setTimeout(res,300));
+    }
+
+    // ── Market Overview: one summarising call across all results ──
+    try{
+      const bullN=results.filter(r=>r.score>10).length;
+      const bearN=results.filter(r=>r.score<-10).length;
+      const confBull=updated.filter(r=>r.hybridDone&&r.hybridScore>10).sort((a,b)=>b.hybridScore-a.hybridScore).slice(0,3).map(r=>r.symbol).join(', ');
+      const confBear=updated.filter(r=>r.hybridDone&&r.hybridScore<-10).sort((a,b)=>a.hybridScore-b.hybridScore).slice(0,3).map(r=>r.symbol).join(', ');
+      const aGrade=updated.filter(r=>r.dsQuality==='A').map(r=>r.symbol).join(', ')||'none';
+      const summaryRes=await callOllamaJSON(
+        'You are a crypto market analyst. Return ONLY valid JSON.',
+        `Market scan — ${filterTf} timeframe: ${bullN} bullish vs ${bearN} bearish signals scanned.
+Hybrid top longs: ${confBull||'none'} | Hybrid top shorts: ${confBear||'none'} | A-grade setups: ${aGrade}
+Return ONLY JSON: {"marketBias":"BULLISH or BEARISH or NEUTRAL","strength":0 to 100,"topLong":["sym1","sym2","sym3"],"topShort":["sym1","sym2"],"summary":"one sentence max 20 words","watch":"symbol to watch most closely"}`,
+        220
+      );
+      if(summaryRes&&summaryRes.marketBias){
+        setMarketSummary({...summaryRes,tf:filterTf,ts:Date.now(),analyzed:candidates.length});
+      }
+    }catch(_){}
+
+    setScanResults([...updated]);
+    setDsAnalyzing(false);
+  },[filterTf]);
 
   // Auto-scan on mount and every N minutes (user-configurable)
   useEffect(()=>{
@@ -2929,11 +3040,13 @@ function ScannerTab({onNavigate,binanceSymbols}){
       const q=searchQ.toUpperCase();
       arr=arr.filter(r=>r.symbol.toUpperCase().includes(q)||(r.name||'').toUpperCase().includes(q));
     }
-    // Confirmation filter
-    if(filterConf!=='all') arr=arr.filter(r=>r.confirmation===filterConf);
-    if(sortBy==='score') arr.sort((a,b)=>Math.abs(b.score)-Math.abs(a.score));
-    else if(sortBy==='bullish') arr.sort((a,b)=>b.score-a.score);
-    else if(sortBy==='bearish') arr.sort((a,b)=>a.score-b.score);
+    // Confirmation filter (HYBRID = special filter for hybrid-confirmed picks)
+    if(filterConf==='HYBRID') arr=arr.filter(r=>r.hybridDone&&r.hybridAgree&&Math.abs(r.hybridScore||0)>=10);
+    else if(filterConf!=='all') arr=arr.filter(r=>r.confirmation===filterConf);
+    if(sortBy==='score') arr.sort((a,b)=>Math.abs(b.aiScore||b.score)-Math.abs(a.aiScore||a.score));
+    else if(sortBy==='hybrid') arr.sort((a,b)=>Math.abs(b.hybridScore??b.aiScore??b.score)-Math.abs(a.hybridScore??a.aiScore??a.score));
+    else if(sortBy==='bullish') arr.sort((a,b)=>(b.hybridScore??b.aiScore??b.score)-(a.hybridScore??a.aiScore??a.score));
+    else if(sortBy==='bearish') arr.sort((a,b)=>(a.hybridScore??a.aiScore??a.score)-(b.hybridScore??b.aiScore??b.score));
     else if(sortBy==='alpha') arr.sort((a,b)=>a.symbol.localeCompare(b.symbol));
     else if(sortBy==='change') arr.sort((a,b)=>Math.abs(parseFloat(b.chg24))-Math.abs(parseFloat(a.chg24)));
     return arr;
@@ -2953,6 +3066,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
     PROBABLE:  scanResults.filter(r=>r.confirmation==='PROBABLE').length,
     WEAK:      scanResults.filter(r=>r.confirmation==='WEAK').length,
     DIVERGING: scanResults.filter(r=>r.confirmation==='DIVERGING').length,
+    HYBRID:    scanResults.filter(r=>r.hybridDone&&r.hybridAgree&&Math.abs(r.hybridScore||0)>=10).length,
   }),[scanResults]);
 
   const isFav=(sym)=>favorites.includes(sym);
@@ -2983,17 +3097,40 @@ function ScannerTab({onNavigate,binanceSymbols}){
         </span>
         {/* NN badge — shown when model is trained */}
         {r.nnSignal&&<span title={`Neural Net: ${r.nnConf}% confidence`} style={{fontSize:9,fontWeight:700,color:r.nnSignal===r.signal?'#ab47bc':'#ff9800',background:r.nnSignal===r.signal?'#ab47bc18':'#ff980018',padding:'2px 5px',borderRadius:4,border:`1px solid ${r.nnSignal===r.signal?'#ab47bc44':'#ff980044'}`}}>🧠{r.nnSignal}</span>}
+        {/* AI Supervisor adjusted score badge */}
+        {r.aiScore!=null&&r.aiScore!==r.score&&<span title={`AI Supervisor adjusted score (NN correction applied)`} style={{fontSize:9,fontWeight:700,color:'#ab47bc',background:'#ab47bc12',padding:'2px 5px',borderRadius:4,border:'1px solid #ab47bc33'}}>AI {r.aiScore>0?'+':''}{r.aiScore}</span>}
+        {/* Hybrid badge — only when DeepSeek has analyzed this asset */}
+        {r.hybridDone&&(
+          <span title={`Hybrid: AI Supervisor (65%) + DeepSeek (35%) = ${r.hybridScore>0?'+':''}${r.hybridScore} | DS: ${r.dsReason||'?'}`}
+            style={{fontSize:9,fontWeight:700,
+              color:r.hybridAgree?'#26a69a':r.hybridConflict?'#ff9800':'#787b86',
+              background:r.hybridAgree?'#26a69a12':r.hybridConflict?'#ff980012':'#78787812',
+              padding:'2px 5px',borderRadius:4,
+              border:`1px solid ${r.hybridAgree?'#26a69a44':r.hybridConflict?'#ff980044':'#78787844'}`}}>
+            {r.hybridAgree?'🤝':'⚠️'}{r.hybridSignal} {r.hybridScore>0?'+':''}{r.hybridScore}
+          </span>
+        )}
+        {/* DeepSeek quality grade */}
+        {r.dsQuality&&<span title={`DeepSeek quality grade: A=prime setup, B=good, C=fair, D=skip`}
+          style={{fontSize:9,fontWeight:800,
+            color:r.dsQuality==='A'?'#ffd600':r.dsQuality==='B'?'#26a69a':r.dsQuality==='C'?'#ff9800':'#ef5350',
+            background:'#00000033',padding:'2px 5px',borderRadius:4,border:'1px solid #2a2e39'}}>
+          {r.dsQuality}
+        </span>}
         <span style={{fontSize:10,color:'#787b86'}}>{r.phase}</span>
         <span style={{fontSize:10,color:parseFloat(r.chg24)>=0?'#26a69a':'#ef5350',marginLeft:'auto'}}>{parseFloat(r.chg24)>=0?'+':''}{r.chg24}%</span>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:4,marginBottom:2}}>
         <div className="bias-bar-mini" style={{width:60}}>
           <div style={{position:'relative',height:'100%'}}>
-            <div style={{position:'absolute',left:r.score>=0?'50%':`${50+r.score/2}%`,width:Math.abs(r.score)/2+'%',height:'100%',background:r.color,borderRadius:2}}/>
+            <div style={{position:'absolute',left:(r.hybridScore??r.aiScore??r.score)>=0?'50%':`${50+(r.hybridScore??r.aiScore??r.score)/2}%`,width:Math.abs(r.hybridScore??r.aiScore??r.score)/2+'%',height:'100%',background:r.hybridAgree?'#26a69a':r.color,borderRadius:2}}/>
           </div>
         </div>
         <span style={{fontSize:9,color:'#787b86'}}>Conf {r.mlConf}%</span>
+        {r.dsConviction!=null&&<span style={{fontSize:9,color:'#5b9bd5'}}>DS {r.dsConviction}%</span>}
       </div>
+      {/* DeepSeek reason — shown only when available */}
+      {r.dsReason&&<p style={{fontSize:9,color:'#5b9bd5',fontStyle:'italic',margin:'2px 0 3px',lineHeight:1.4}}>🐋 {r.dsReason}</p>}
       {r.topSignals&&r.topSignals.length>0&&(
         <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
           {r.topSignals.map((s,i)=>(
@@ -3095,7 +3232,8 @@ function ScannerTab({onNavigate,binanceSymbols}){
           <span style={{fontSize:9,color:'#787b86'}}>min</span>
         </div>
         <select value={sortBy} onChange={e=>setSortBy(e.target.value)}>
-          <option value="score">Strongest Signal</option>
+          <option value="score">AI Score</option>
+          <option value="hybrid">🤝 Hybrid Score</option>
           <option value="bullish">Most Bullish</option>
           <option value="bearish">Most Bearish</option>
           <option value="change">24h Change</option>
@@ -3109,6 +3247,7 @@ function ScannerTab({onNavigate,binanceSymbols}){
             {key:'PROBABLE',  label:'~ Probable',    col:'#ff9800', count:confCounts.PROBABLE,  tip:'TFs agree but momentum/micro slightly off — wait for extra confirmation'},
             {key:'WEAK',      label:'✗ Weak',         col:'#ef5350', count:confCounts.WEAK,      tip:'Only bias points direction — low conviction, skip or wait'},
             {key:'DIVERGING', label:'⚡ Diverging',   col:'#ab47bc', count:confCounts.DIVERGING, tip:'Current TF and Higher TF disagree — DO NOT TRADE, conflicting signals'},
+            {key:'HYBRID',    label:'🤝 Hybrid',      col:'#5b9bd5', count:confCounts.HYBRID,    tip:'DeepSeek + AI Supervisor both agree — highest conviction picks'},
           ].map(({key,label,col,count,tip})=>(
             <button key={key} onClick={()=>setFilterConf(key)} title={tip}
               style={{
@@ -3121,13 +3260,103 @@ function ScannerTab({onNavigate,binanceSymbols}){
             </button>
           ))}
         </div>
+        {/* Manual hybrid trigger — lets user re-run DeepSeek analysis without rescanning */}
+        {!scanning&&scanResults.length>0&&(
+          <button onClick={()=>runHybridAnalysis(scanResults).catch(()=>{})} disabled={dsAnalyzing}
+            title="Run DeepSeek analysis on top picks"
+            style={{background:dsAnalyzing?'#1e222d':'#2962ff18',border:`1px solid ${dsAnalyzing?'#2a2e39':'#2962ff44'}`,borderRadius:4,
+              color:dsAnalyzing?'#787b86':'#5b9bd5',fontSize:10,padding:'4px 8px',cursor:dsAnalyzing?'default':'pointer',fontWeight:600,
+              display:'flex',alignItems:'center',gap:4,whiteSpace:'nowrap'}}>
+            {dsAnalyzing?<><span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>🐋</span>Analyzing…</>:<>🤝 Hybrid</>}
+          </button>
+        )}
         <div style={{marginLeft:'auto'}} className="scan-status">
           {scanning&&<div style={{width:10,height:10,border:'2px solid #2962ff',borderTopColor:'transparent',borderRadius:'50%',animation:'spin 1s linear infinite'}}/>}
           {scanning?<span style={{color:'#ff9800'}}>Scanning {scanType==='crypto'?`${scanLimit} crypto`:scanType==='stocks'?'stocks':`${scanLimit} crypto+stocks`}…</span>:
             <span style={{color:'#26a69a'}}>✓ {scanResults.length} scanned</span>}
+          {dsAnalyzing&&!scanning&&(
+            <span style={{display:'flex',alignItems:'center',gap:4,color:'#5b9bd5'}}>
+              <span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>🐋</span>
+              DS {dsQueue.done}/{dsQueue.total}
+            </span>
+          )}
           {lastScan&&<span> · {lastScan.toLocaleTimeString()}</span>}
         </div>
       </div>
+
+      {/* ── Hybrid Supervisor DeepSeek Progress Bar ── */}
+      {dsAnalyzing&&(
+        <div style={{padding:'4px 12px',background:'#0d1a2e',borderBottom:'1px solid #2962ff33',flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+            <span style={{fontSize:10,color:'#5b9bd5',fontWeight:700}}>🤝 Hybrid Supervisor analyzing top picks…</span>
+            <span style={{fontSize:10,color:'#787b86',marginLeft:'auto'}}>{dsQueue.done}/{dsQueue.total} done</span>
+          </div>
+          <div style={{height:3,background:'#1e3a5f',borderRadius:2,overflow:'hidden'}}>
+            <div style={{width:`${dsQueue.total>0?Math.round(dsQueue.done/dsQueue.total*100):0}%`,height:'100%',background:'linear-gradient(90deg,#2962ff,#5b9bd5)',borderRadius:2,transition:'width .4s'}}/>
+          </div>
+        </div>
+      )}
+
+      {/* ── Market Overview Panel — DeepSeek market-wide summary ── */}
+      {marketSummary&&!dsAnalyzing&&(
+        <div style={{padding:'8px 12px',background:'linear-gradient(135deg,#0d1117,#0d1a2e)',borderBottom:'2px solid #2962ff44',flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:10,fontWeight:700,color:'#5b9bd5'}}>🤝 Hybrid Market Overview · {marketSummary.tf}</span>
+            {/* Overall bias badge */}
+            <span style={{
+              fontSize:11,fontWeight:800,
+              color:marketSummary.marketBias==='BULLISH'?'#26a69a':marketSummary.marketBias==='BEARISH'?'#ef5350':'#787b86',
+              background:marketSummary.marketBias==='BULLISH'?'#26a69a18':marketSummary.marketBias==='BEARISH'?'#ef535018':'#78787818',
+              padding:'3px 10px',borderRadius:6,border:`1px solid ${marketSummary.marketBias==='BULLISH'?'#26a69a44':marketSummary.marketBias==='BEARISH'?'#ef535044':'#78787844'}`}}>
+              {marketSummary.marketBias==='BULLISH'?'▲':marketSummary.marketBias==='BEARISH'?'▼':'—'} {marketSummary.marketBias}
+            </span>
+            {/* Strength bar */}
+            <div style={{display:'flex',alignItems:'center',gap:4,flex:1,minWidth:100}}>
+              <span style={{fontSize:9,color:'#787b86'}}>Strength</span>
+              <div style={{flex:1,height:4,background:'#2a2e39',borderRadius:2,overflow:'hidden'}}>
+                <div style={{width:(marketSummary.strength||0)+'%',height:'100%',borderRadius:2,
+                  background:marketSummary.marketBias==='BULLISH'?'#26a69a':marketSummary.marketBias==='BEARISH'?'#ef5350':'#787b86'}}/>
+              </div>
+              <span style={{fontSize:9,color:'#d1d4dc',fontWeight:700}}>{marketSummary.strength||0}%</span>
+            </div>
+            <span style={{fontSize:9,color:'#787b86'}}>Analyzed {marketSummary.analyzed||0} picks · {new Date(marketSummary.ts).toLocaleTimeString()}</span>
+          </div>
+          {/* Summary sentence */}
+          {marketSummary.summary&&<p style={{fontSize:10,color:'#d1d4dc',fontStyle:'italic',margin:'5px 0 4px'}}>🐋 "{marketSummary.summary}"</p>}
+          {/* Top picks */}
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            {marketSummary.topLong&&marketSummary.topLong.length>0&&(
+              <div style={{display:'flex',alignItems:'center',gap:4}}>
+                <span style={{fontSize:9,color:'#787b86'}}>Top Longs:</span>
+                {marketSummary.topLong.map(s=>(
+                  <span key={s} style={{fontSize:10,fontWeight:700,color:'#26a69a',background:'#26a69a12',border:'1px solid #26a69a33',borderRadius:4,padding:'1px 6px',cursor:'pointer'}}
+                    onClick={()=>onNavigate&&onNavigate(s.includes('/')?s:s+'/USDT',filterTf)}>
+                    ▲{s}
+                  </span>
+                ))}
+              </div>
+            )}
+            {marketSummary.topShort&&marketSummary.topShort.length>0&&(
+              <div style={{display:'flex',alignItems:'center',gap:4}}>
+                <span style={{fontSize:9,color:'#787b86'}}>Top Shorts:</span>
+                {marketSummary.topShort.map(s=>(
+                  <span key={s} style={{fontSize:10,fontWeight:700,color:'#ef5350',background:'#ef535012',border:'1px solid #ef535033',borderRadius:4,padding:'1px 6px',cursor:'pointer'}}
+                    onClick={()=>onNavigate&&onNavigate(s.includes('/')?s:s+'/USDT',filterTf)}>
+                    ▼{s}
+                  </span>
+                ))}
+              </div>
+            )}
+            {marketSummary.watch&&(
+              <span style={{fontSize:10,color:'#ffd600',background:'#ffd60012',border:'1px solid #ffd60033',borderRadius:4,padding:'1px 8px',cursor:'pointer'}}
+                onClick={()=>onNavigate&&onNavigate(marketSummary.watch.includes('/')?marketSummary.watch:marketSummary.watch+'/USDT',filterTf)}>
+                ⭐ Watch: {marketSummary.watch}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* FAVORITES BAR */}
       {favorites.length>0&&(
         <div style={{display:'flex',alignItems:'center',gap:4,padding:'4px 12px',borderBottom:'1px solid #2a2e39',flexWrap:'wrap',background:'#1a1a2e'}}>
@@ -3146,7 +3375,14 @@ function ScannerTab({onNavigate,binanceSymbols}){
         <div className="scan-section">
           <div className="scan-header">
             <span style={{color:'#26a69a',fontWeight:700,fontSize:13}}>▲ Bullish Signals</span>
-            <span style={{fontSize:10,color:'#787b86'}}>{bullish.length} assets</span>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              {bullish.filter(r=>r.hybridDone&&r.hybridScore>10&&r.hybridAgree).length>0&&(
+                <span style={{fontSize:9,color:'#26a69a',background:'#26a69a12',border:'1px solid #26a69a33',borderRadius:8,padding:'1px 6px'}}>
+                  🤝 {bullish.filter(r=>r.hybridDone&&r.hybridScore>10&&r.hybridAgree).length} hybrid confirmed
+                </span>
+              )}
+              <span style={{fontSize:10,color:'#787b86'}}>{bullish.length} assets</span>
+            </div>
           </div>
           <div className="scan-cards">
             {/* Favorite results pinned at top */}
@@ -3161,7 +3397,14 @@ function ScannerTab({onNavigate,binanceSymbols}){
         <div className="scan-section">
           <div className="scan-header">
             <span style={{color:'#ef5350',fontWeight:700,fontSize:13}}>▼ Bearish Signals</span>
-            <span style={{fontSize:10,color:'#787b86'}}>{bearish.length} assets</span>
+            <div style={{display:'flex',alignItems:'center',gap:6}}>
+              {bearish.filter(r=>r.hybridDone&&r.hybridScore<-10&&r.hybridAgree).length>0&&(
+                <span style={{fontSize:9,color:'#ef5350',background:'#ef535012',border:'1px solid #ef535033',borderRadius:8,padding:'1px 6px'}}>
+                  🤝 {bearish.filter(r=>r.hybridDone&&r.hybridScore<-10&&r.hybridAgree).length} hybrid confirmed
+                </span>
+              )}
+              <span style={{fontSize:10,color:'#787b86'}}>{bearish.length} assets</span>
+            </div>
           </div>
           <div className="scan-cards">
             {/* Favorite results pinned at top */}
