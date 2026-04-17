@@ -2070,8 +2070,15 @@ function Sparkline({data,color,w=60,h=20}){
 // ─── AI CHAT TAB ─────────────────────────────────────────────────────────────
 function AIChatTab({marketContext}){
   const[apiKey,setApiKey]=useState(()=>localStorage.getItem('smc_ai_api_key')||'');
-  const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'gemini');
-  const[messages,setMessages]=useState([{role:'assistant',content:'👋 Hi! I\'m your free AI assistant powered by Google Gemini.\n\nI can help with ANYTHING:\n• Trading questions — signals, indicators, market analysis\n• General chat — coding, math, writing, any topic\n• App modifications — add features, change colors, fix bugs\n\nTrading examples:\n  "Should I go long on BTC right now?"\n  "What does RSI 72 mean here?"\n  "Explain the current ghost candles"\n\nCode change examples:\n  "Add a volume spike alert to the chart"\n  "Make the bias score font bigger"\n\nGeneral examples:\n  "Explain what Wyckoff theory is"\n  "Write me a trading journal template"\n\n⬆️ Add your FREE Gemini API key above to get started.\nGet it free at aistudio.google.com → Get API Key (uses your Google account, no payment needed)'}]);
+  const[provider,setProvider]=useState(()=>localStorage.getItem('smc_ai_provider')||'deepseek');
+  const[ollamaUrl,setOllamaUrl]=useState(()=>localStorage.getItem('smc_ollama_url')||'http://localhost:11434');
+  const[ollamaModel,setOllamaModel]=useState(()=>localStorage.getItem('smc_ollama_model')||'deepseek-r1:8b');
+  const[showOllamaConfig,setShowOllamaConfig]=useState(false);
+  const _mkWelcome=(prov)=>{
+    if(prov==='deepseek') return '🤖 DeepSeek-R1 connected (local Ollama)\n\nI\'m running entirely on your machine — private, free, no API key.\n\nI have access to ALL your analysis:\n• All 12 module scores + adaptive weights\n• NN prediction (direction, body size, range)\n• Module accuracy rolling stats\n• PDH/PDL, L/S Ratio, RS vs BTC, OI/Funding\n\nTry:\n  "Give me a full DeepSeek analysis of the current setup"\n  "Why is the bias score showing LONG?"\n  "Is the ghost candle prediction reliable here?"\n  "What is the module agreement saying?"\n\n⚡ Auto-Analyze button below for instant deep analysis.';
+    return '👋 Hi! I\'m your AI assistant.\n\nI can help with trading analysis, market questions, and app modifications.\n\n⬆️ Configure your AI provider above to get started.';
+  };
+  const[messages,setMessages]=useState([{role:'assistant',content:_mkWelcome(localStorage.getItem('smc_ai_provider')||'deepseek')}]);
   const[input,setInput]=useState('');
   const[loading,setLoading]=useState(false);
   const[showKey,setShowKey]=useState(()=>!localStorage.getItem('smc_ai_api_key'));
@@ -2133,7 +2140,45 @@ function AIChatTab({marketContext}){
     return null;
   };
 
+  // Strip DeepSeek <think>...</think> blocks — return {thinking, answer}
+  const _parseDeepSeek=(raw)=>{
+    const tm=raw.match(/<think>([\s\S]*?)<\/think>/i);
+    const thinking=tm?tm[1].trim():'';
+    const answer=raw.replace(/<think>[\s\S]*?<\/think>/gi,'').trim()||raw.trim();
+    return{thinking,answer};
+  };
+
   const callLLM=async(systemPrompt,userMsg,maxTokens=800)=>{
+    // ── DeepSeek-R1 via Ollama (local — no API key) ──
+    if(provider==='deepseek'){
+      const url=`${ollamaUrl}/api/chat`;
+      let resp;
+      try{
+        resp=await fetch(url,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({
+            model:ollamaModel,
+            messages:[{role:'system',content:systemPrompt},{role:'user',content:userMsg}],
+            stream:false,
+            options:{num_predict:maxTokens,temperature:0.6}
+          })
+        });
+      }catch(netErr){
+        throw new Error(
+          `Cannot reach Ollama at ${ollamaUrl}.\n\n`+
+          `Make sure Ollama is running:\n  ollama serve\n\n`+
+          `If app is on GitHub Pages, Ollama needs CORS open:\n`+
+          `  Windows: set OLLAMA_ORIGINS=* && ollama serve\n`+
+          `  Mac/Linux: OLLAMA_ORIGINS=* ollama serve\n\n`+
+          `Then check: ${ollamaUrl}/api/tags`
+        );
+      }
+      if(!resp.ok){const e=await resp.text().catch(()=>'');throw new Error(`Ollama ${resp.status}: ${e||'unknown error'}`);}
+      const d=await resp.json();
+      const raw=d?.message?.content||d?.response||'(no response)';
+      return raw; // caller strips <think> tags via _parseDeepSeek
+    }
     // ── Google Gemini (FREE — 1500 req/day) ──
     if(provider==='gemini'){
       // Auto-discover which model works for this key
@@ -2190,33 +2235,96 @@ function AIChatTab({marketContext}){
     return /\b(btc|eth|sol|crypto|stock|trade|trading|signal|long|short|rsi|macd|ema|candle|chart|price|market|bull|bear|buy|sell|position|leverage|entry|stop|target|profit|loss|bias|indicator|volume|funding|fear|greed|wyckoff|fibonacci|support|resistance|breakout|trend|momentum|divergence|neural|nn|prediction|ghost|scanner|analysis|atr|bb|bollinger|stoch|cmf|oi|vp|poc|vah|val)\b/.test(lo);
   };
 
+  // Build full market context string — richer for DeepSeek since it can reason deeply
+  const _buildCtxStr=(ctx,deep=false)=>{
+    if(!ctx?.symbol) return '';
+    const mods=(ctx.features||[]);
+    const modLines=mods.length?mods.map(f=>`  ${f.n}: score=${f.v>0?'+':''}${f.v||0} weight=${((f.w||0)*100).toFixed(0)}% acc=${f.acc!=null?Math.round(f.acc*100)+'%':'?'}`).join('\n'):'  (no module data yet)';
+    // Load module accuracy from localStorage for deeper context
+    let modAccLines='';
+    if(deep){
+      try{
+        const ma=JSON.parse(localStorage.getItem('smc_mod_acc_v1')||'{}');
+        modAccLines='\nModule rolling accuracy (last 50 candles):\n'+Object.entries(ma).map(([n,s])=>`  ${n}: ${s.total>=10?Math.round(s.correct/s.total*100)+'%':'not enough data'} (${s.total||0} candles)`).join('\n');
+      }catch(_){}
+    }
+    const nnPoolSize=ctx.nnPoolSize||0;
+    return `
+═══ LIVE MARKET STATE ═══
+Symbol: ${ctx.symbol} | TF: ${ctx.tf} | Price: ${ctx.price}
+Signal: ${ctx.aiSignal||'?'} | Bias Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'})${ctx.aiOverride?' ⚠️ NN overrode indicators':''}
+RSI(14): ${ctx.rsi||'?'} | StochRSI K: ${ctx.stochK||'?'} | MACD hist: ${ctx.macdHist||'?'} | CMF: ${ctx.cmf||'?'}
+Wyckoff: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'} | HTF Bias: ${ctx.htfBias||'?'}
+VP: POC=${ctx.poc||'?'} VAH=${ctx.vah||'?'} VAL=${ctx.val||'?'}
+Entry: ${ctx.price} | SL: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
+OI Funding: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
+PDH: ${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' [SWEPT ⚡]':''} | PDL: ${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' [SWEPT ⚡]':''}
+L/S Ratio: Long ${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%':'?'} / Short ${ctx.lsShortPct!=null?ctx.lsShortPct.toFixed(1)+'%':'?'}${ctx.lsLongPct>65?' (crowd overly Long → bearish lean)':ctx.lsShortPct>65?' (crowd overly Short → bullish lean)':''}
+RS vs BTC: Coin ${ctx.rsCoinChg!=null?(ctx.rsCoinChg>=0?'+':'')+ctx.rsCoinChg.toFixed(2)+'%':'?'} | BTC ${ctx.rsBtcChg!=null?(ctx.rsBtcChg>=0?'+':'')+ctx.rsBtcChg.toFixed(2)+'%':'?'} | Delta ${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'} (${ctx.rsSignal||'?'})
+
+═══ AI SUPERVISOR (Custom NN + 12 Modules) ═══
+NN Probability: ${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(1)+'%':'?'} | Signal: ${ctx.nnSignal||'?'} | Confidence: ${ctx.nnConf||'?'}%
+NN Accuracy: ${ctx.nnRecentAcc!=null?ctx.nnRecentAcc+'% (live rolling)':ctx.nnAcc+'% (training)'} | Corrections: ${ctx.nnCorrections||0} | Pool: ${nnPoolSize.toLocaleString()} cross-TF examples
+Expected move: ${ctx.nnMag!=null?Math.round(ctx.nnMag*100)+'%':'?'} of 2×ATR | Expected range: ${ctx.nnVol!=null?Math.round(ctx.nnVol*100)+'%':'?'} of 3×ATR
+AI Override: ${ctx.aiOverride?'YES — NN disagrees with indicators':'No'}
+
+═══ 12-MODULE SCORES (w = adaptive weight, acc = rolling accuracy) ═══
+${modLines}${modAccLines}
+`;
+  };
+
   const doChat=async(q)=>{
     const ctx=marketContext||{};
-    const isMarket=isMarketQ(q);
-    // Build system prompt — always include market context if available, but also allow general chat
-    const marketCtxStr=ctx.symbol?`
-Current live market state (use if relevant to the question):
-- Symbol: ${ctx.symbol} | Timeframe: ${ctx.tf} | Price: ${ctx.price}
-- Signal: ${ctx.aiSignal||'?'} | Bias Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'})${ctx.aiOverride?' — NN overrode indicators':''}
-- RSI(14): ${ctx.rsi||'?'} | StochRSI K: ${ctx.stochK||'?'} | MACD hist: ${ctx.macdHist||'?'} | CMF: ${ctx.cmf||'?'}
-- Wyckoff Phase: ${ctx.phase||'?'} | Confidence: ${ctx.confidence||'?'}
-- Volume Profile: POC=${ctx.poc||'?'} | VAH=${ctx.vah||'?'} | VAL=${ctx.val||'?'}
-- Entry: current price | SL: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
-- NN: prob=${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(0)+'%':'?'} accuracy=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% corrections=${ctx.nnCorrections||0}
-- OI Funding: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
-- PDH: ${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' [SWEPT ⚡]':''} | PDL: ${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' [SWEPT ⚡]':''}
-- L/S Ratio: Long ${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%':'?'} / Short ${ctx.lsShortPct!=null?ctx.lsShortPct.toFixed(1)+'%':'?'}${ctx.lsLongPct>65?' — crowd overly Long (bearish lean)':ctx.lsShortPct>65?' — crowd overly Short (bullish lean)':''}
-- RS vs BTC (20-bar): Coin ${ctx.rsCoinChg!=null?(ctx.rsCoinChg>=0?'+':'')+ctx.rsCoinChg.toFixed(2)+'%':'?'} | BTC ${ctx.rsBtcChg!=null?(ctx.rsBtcChg>=0?'+':'')+ctx.rsBtcChg.toFixed(2)+'%':'?'} | RS Delta ${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'} (${ctx.rsSignal||'?'})
-`:'';
-    const sys=`You are a helpful, friendly AI assistant. You are embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool, but you can help with ANY topic — not just trading.
-${marketCtxStr}
+    const isDeep=provider==='deepseek';
+    const ctxStr=_buildCtxStr(ctx,isDeep); // DeepSeek gets full module accuracy
+    const sys=isDeep
+      ?`You are DeepSeek-R1, an expert quantitative trading analyst embedded inside SMC Pro Analyzer. You have access to a 12-module AI scoring system with a custom neural network that learns continuously from candle data across all timeframes.
+${ctxStr}
+Your role:
+- Provide deep, reasoned market analysis using ALL the data above
+- Explain WHY modules agree/disagree and what that means for the trade
+- Be specific: reference exact scores, accuracy numbers, and signal values
+- Identify the highest-accuracy modules and weight them appropriately in your conclusion
+- Keep answers focused and actionable (under 500 words)
+- Use the <think> block to reason privately, then give a clean final answer`
+      :`You are a helpful, friendly AI assistant embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool.
+${ctxStr}
 Guidelines:
 - For trading/market questions: be specific, actionable, reference the live data above
-- For general questions (coding, math, writing, anything): just answer helpfully like a smart assistant
-- Keep responses clear and concise (under 400 words unless more detail is genuinely needed)
+- For general questions: just answer helpfully
+- Keep responses concise (under 400 words)
 - Be conversational and friendly`;
-    const ans=await callLLM(sys,q);
-    addMsg('assistant',ans);
+    const raw=await callLLM(sys,q,isDeep?1000:800);
+    if(isDeep){
+      const{thinking,answer}=_parseDeepSeek(raw);
+      if(thinking&&thinking.length>20){
+        // Add thinking as a collapsible note
+        addMsg('assistant',`🤔 *[DeepSeek reasoned for ${thinking.split(' ').length} words — tap to see]*\n\n${answer}`,{thinking});
+      }else{
+        addMsg('assistant',answer);
+      }
+    }else{
+      addMsg('assistant',raw);
+    }
+  };
+
+  // DeepSeek full auto-analysis — structured deep dive using all available data
+  const doAutoAnalyze=async()=>{
+    const ctx=marketContext||{};
+    if(!ctx.symbol){addMsg('assistant','⚠️ No chart loaded yet. Open a symbol first.');return;}
+    const prompt=`Perform a comprehensive trading analysis for ${ctx.symbol} on the ${ctx.tf} timeframe. Structure your response as:
+
+1. **Signal Summary** — What is the primary signal and how confident are you?
+2. **Module Consensus** — Which of the 12 modules agree/disagree? What does the disagreement tell us?
+3. **NN Assessment** — Is the neural network's prediction reliable based on its accuracy stats?
+4. **Key Levels** — What price levels matter most right now (VP POC/VAH/VAL, PDH/PDL)?
+5. **Crowd Positioning** — What does L/S ratio + funding rate tell us about potential squeeze?
+6. **Ghost Candle Reliability** — Given the module agreement ratio and NN accuracy, how much should we trust the predicted candles?
+7. **Trade Decision** — Go LONG, SHORT, or WAIT? Specific entry, SL, TP with reasoning.`;
+    addMsg('user','🧠 Auto-Analyze (DeepSeek full analysis)');
+    setLoading(true);
+    try{await doChat(prompt);}
+    finally{setLoading(false);}
   };
 
   const doCodeMod=async(req)=>{
@@ -2257,12 +2365,14 @@ Rules:
   const send=async()=>{
     const t=input.trim();
     if(!t||loading) return;
-    if(!apiKey){addMsg('assistant','⚠️ Please enter your API key first (click the key icon above).');return;}
+    // DeepSeek (local) needs no API key — all other providers do
+    if(provider!=='deepseek'&&!apiKey){addMsg('assistant','⚠️ Please enter your API key first (click the key icon above).');return;}
     setInput('');
     addMsg('user',t);
     setLoading(true);
     try{
-      if(isCodeReq(t)) await doCodeMod(t);
+      // Disable code modification for local DeepSeek — too slow for large file on 8B model
+      if(provider!=='deepseek'&&isCodeReq(t)) await doCodeMod(t);
       else await doChat(t);
     }catch(e){addMsg('assistant',`❌ ${e.message}`);}
     finally{setLoading(false);}
@@ -2283,89 +2393,141 @@ Rules:
   return(
     <div style={{display:'flex',flexDirection:'column',height:'100%',background:'#131722',overflow:'hidden'}}>
       {/* API key bar */}
-      {showKey?(
-        <div style={{padding:'10px 14px',borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0}}>
-          <p style={{fontSize:11,color:'#787b86',marginBottom:6}}>🔑 API Key required — stored only in your browser</p>
-          <div style={{display:'flex',gap:6,marginBottom:6,flexWrap:'wrap'}}>
-            <select value={provider} onChange={e=>{setProvider(e.target.value);localStorage.setItem('smc_ai_provider',e.target.value);}}
-              style={{background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px'}}>
-              <option value="gemini">🆓 Gemini (Google) — FREE</option>
-              <option value="openai">GPT-4o (OpenAI)</option>
-              <option value="anthropic">Claude (Anthropic)</option>
-            </select>
-            <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
-              placeholder={provider==='gemini'?'AIza... (from aistudio.google.com)':provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
-              style={{flex:1,minWidth:180,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'5px 8px',outline:'none'}}
-              onKeyDown={e=>{if(e.key==='Enter'){localStorage.setItem('smc_ai_api_key',apiKey);setShowKey(false);}}}/>
-            <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);_geminiModelRef.current=null;setShowKey(false);}}
-              style={{background:'#26a69a',border:'none',borderRadius:4,color:'#fff',fontSize:11,padding:'5px 14px',cursor:'pointer',fontWeight:600}}>Connect</button>
+      {/* Provider bar — always visible */}
+      <div style={{padding:'6px 12px',borderBottom:'1px solid #2a2e39',background:'#1e222d',flexShrink:0}}>
+        <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          <select value={provider} onChange={e=>{
+            const p=e.target.value;setProvider(p);localStorage.setItem('smc_ai_provider',p);
+            setMessages([{role:'assistant',content:_mkWelcome(p)}]);
+          }} style={{background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'4px 6px'}}>
+            <option value="deepseek">🤖 DeepSeek-R1 (Local — FREE)</option>
+            <option value="gemini">🆓 Gemini (Google — FREE)</option>
+            <option value="openai">GPT-4o (OpenAI)</option>
+            <option value="anthropic">Claude (Anthropic)</option>
+          </select>
+          {provider==='deepseek'?(
+            <span style={{fontSize:9,color:'#26a69a',background:'#26a69a18',padding:'2px 8px',borderRadius:8,border:'1px solid #26a69a33'}}>🟢 Local · No API key</span>
+          ):(
+            <>
+              <input type="password" value={apiKey} onChange={e=>setApiKey(e.target.value)}
+                placeholder={provider==='gemini'?'AIza... (aistudio.google.com)':provider==='anthropic'?'sk-ant-api03-...':'sk-...'}
+                style={{flex:1,minWidth:140,background:'#131722',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:11,padding:'4px 8px',outline:'none'}}
+                onKeyDown={e=>{if(e.key==='Enter'){localStorage.setItem('smc_ai_api_key',apiKey);_geminiModelRef.current=null;}}}/>
+              <button onClick={()=>{localStorage.setItem('smc_ai_api_key',apiKey);_geminiModelRef.current=null;}}
+                style={{background:'#2962ff22',border:'1px solid #2962ff44',borderRadius:4,color:'#2962ff',fontSize:10,padding:'4px 10px',cursor:'pointer',fontWeight:600}}>Save</button>
+            </>
+          )}
+          <button onClick={()=>setShowOllamaConfig(v=>!v)} title="Configure Ollama server"
+            style={{background:'none',border:'1px solid #2a2e39',borderRadius:4,color:'#787b86',fontSize:10,padding:'4px 8px',cursor:'pointer'}}>⚙</button>
+        </div>
+        {/* Ollama config panel */}
+        {showOllamaConfig&&(
+          <div style={{marginTop:8,padding:'8px 10px',background:'#131722',borderRadius:6,border:'1px solid #2a2e39'}}>
+            <p style={{fontSize:10,color:'#787b86',marginBottom:6,fontWeight:600}}>Ollama Configuration</p>
+            <div style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+              <span style={{fontSize:10,color:'#787b86',width:60}}>URL:</span>
+              <input value={ollamaUrl} onChange={e=>setOllamaUrl(e.target.value)}
+                style={{flex:1,background:'#1e222d',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:10,padding:'3px 7px',outline:'none'}}/>
+              <button onClick={()=>localStorage.setItem('smc_ollama_url',ollamaUrl)} style={{background:'#2962ff22',border:'1px solid #2962ff44',borderRadius:4,color:'#2962ff',fontSize:10,padding:'3px 8px',cursor:'pointer'}}>Save</button>
+            </div>
+            <div style={{display:'flex',gap:6,marginBottom:6,alignItems:'center'}}>
+              <span style={{fontSize:10,color:'#787b86',width:60}}>Model:</span>
+              <input value={ollamaModel} onChange={e=>setOllamaModel(e.target.value)}
+                placeholder="deepseek-r1:8b"
+                style={{flex:1,background:'#1e222d',border:'1px solid #2a2e39',borderRadius:4,color:'#d1d4dc',fontSize:10,padding:'3px 7px',outline:'none'}}/>
+              <button onClick={()=>localStorage.setItem('smc_ollama_model',ollamaModel)} style={{background:'#2962ff22',border:'1px solid #2962ff44',borderRadius:4,color:'#2962ff',fontSize:10,padding:'3px 8px',cursor:'pointer'}}>Save</button>
+            </div>
+            <div style={{background:'#1a1f2e',borderRadius:5,padding:'6px 8px'}}>
+              <p style={{fontSize:9,color:'#26a69a',marginBottom:2,fontWeight:600}}>Quick Setup:</p>
+              <p style={{fontSize:9,color:'#787b86',fontFamily:'monospace'}}>ollama pull deepseek-r1:8b</p>
+              <p style={{fontSize:9,color:'#787b86',fontFamily:'monospace'}}>OLLAMA_ORIGINS=* ollama serve</p>
+              <p style={{fontSize:9,color:'#787b86',marginTop:4}}>CORS must be open if app runs on GitHub Pages. On Windows: set OLLAMA_ORIGINS=* in env vars before starting Ollama.</p>
+            </div>
           </div>
-          {provider==='gemini'&&<div style={{background:'#26a69a18',border:'1px solid #26a69a44',borderRadius:5,padding:'6px 10px',marginBottom:6}}>
-            <p style={{fontSize:11,color:'#26a69a',fontWeight:600,marginBottom:2}}>✅ Gemini 2.0 Flash — Completely FREE</p>
-            <p style={{fontSize:10,color:'#787b86'}}>1. Go to <a href="https://aistudio.google.com" target="_blank" style={{color:'#26a69a'}}>aistudio.google.com</a></p>
-            <p style={{fontSize:10,color:'#787b86'}}>2. Sign in with your <b style={{color:'#d1d4dc'}}>existing Google account</b></p>
-            <p style={{fontSize:10,color:'#787b86'}}>3. Click <b style={{color:'#d1d4dc'}}>"Get API Key"</b> → "Create API Key" → Copy</p>
-            <p style={{fontSize:10,color:'#787b86'}}>4. Paste above → Connect · <b style={{color:'#d1d4dc'}}>1,500 free requests/day</b></p>
-          </div>}
-          {provider!=='gemini'&&<p style={{fontSize:10,color:'#787b86'}}>
-            Get key: {provider==='anthropic'?<a href="https://console.anthropic.com" target="_blank" style={{color:'#2962ff'}}>Anthropic Console</a>:<a href="https://platform.openai.com/api-keys" target="_blank" style={{color:'#2962ff'}}>OpenAI Platform</a>}
-          </p>}
-        </div>
-      ):(
-        <div style={{padding:'4px 12px',borderBottom:'1px solid #2a2e39',display:'flex',alignItems:'center',gap:8,fontSize:10,color:'#787b86',flexShrink:0}}>
-          <span style={{color:'#26a69a',fontSize:8}}>●</span>
-          <span>{provider==='gemini'?'Google Gemini':provider==='anthropic'?'Claude (Anthropic)':'GPT-4o (OpenAI)'} connected</span>
-          <span style={{color:provider==='gemini'?'#26a69a':'#2962ff',marginLeft:4,fontSize:9}}>{provider==='gemini'?'gemini-1.5-flash 🆓':provider==='anthropic'?'claude-3-5-haiku':'gpt-4o-mini'}</span>
-          <button onClick={()=>setShowKey(true)} style={{marginLeft:'auto',background:'none',border:'1px solid #2a2e39',color:'#787b86',cursor:'pointer',fontSize:9,padding:'2px 8px',borderRadius:3}}>Change Key</button>
-        </div>
-      )}
+        )}
+        {provider==='gemini'&&!apiKey&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>Get free key: <a href="https://aistudio.google.com" target="_blank" style={{color:'#2962ff'}}>aistudio.google.com</a> → Get API Key (1,500 req/day free)</p>}
+      </div>
 
       {/* Messages */}
       <div style={{flex:1,overflowY:'auto',padding:12}}>
         {messages.map((msg,i)=>{
           const isUser=msg.role==='user';
+          const hasThinking=!!msg.thinking;
+          const[showThink,setShowThink]=React.useState(false);
           return(
             <div key={i} style={{display:'flex',flexDirection:isUser?'row-reverse':'row',gap:8,marginBottom:12,alignItems:'flex-start'}}>
-              <div style={{width:26,height:26,borderRadius:'50%',flexShrink:0,background:isUser?'#2962ff':'#1e222d',border:`1px solid ${isUser?'#2962ff':'#2a2e39'}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11}}>
-                {isUser?'👤':'🤖'}
+              <div style={{width:26,height:26,borderRadius:'50%',flexShrink:0,background:isUser?'#2962ff':'#12172a',border:`1px solid ${isUser?'#2962ff':'#2a2e39'}`,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11}}>
+                {isUser?'👤':provider==='deepseek'?'🐋':'🤖'}
               </div>
-              <div style={{maxWidth:'82%',background:isUser?'#2962ff22':'#1e222d',border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
-                {msg.content}
-                {msg.type==='fileReq'&&(
-                  <button onClick={async()=>{
-                    try{
-                      const[fh]=await window.showOpenFilePicker({types:[{description:'HTML',accept:{'text/html':['.html']}}]});
-                      setLoading(true);
-                      addMsg('assistant',`📂 ${fh.name} selected — applying change...`);
-                      await applyCode(msg.req,fh);
-                    }catch(e){if(e.name!=='AbortError')addMsg('assistant',`❌ ${e.message}`);}
-                    finally{setLoading(false);}
-                  }} style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
-                    📂 Select index.html
-                  </button>
+              <div style={{maxWidth:'85%'}}>
+                {/* DeepSeek thinking toggle */}
+                {hasThinking&&(
+                  <div style={{marginBottom:4}}>
+                    <button onClick={()=>setShowThink(v=>!v)}
+                      style={{background:'#1a1f2e',border:'1px solid #2a2e39',borderRadius:5,color:'#787b86',fontSize:9,padding:'2px 8px',cursor:'pointer',fontStyle:'italic'}}>
+                      {showThink?'▲ Hide reasoning':'▼ Show DeepSeek reasoning'}
+                    </button>
+                    {showThink&&<div style={{marginTop:4,padding:'6px 10px',background:'#0d1117',border:'1px solid #1e3a2e',borderRadius:5,fontSize:10,color:'#4a8f6f',whiteSpace:'pre-wrap',lineHeight:1.55,fontStyle:'italic',maxHeight:160,overflowY:'auto'}}>
+                      {msg.thinking}
+                    </div>}
+                  </div>
                 )}
-                {msg.type==='success'&&(
-                  <button onClick={()=>location.reload()} style={{display:'block',marginTop:8,background:'#26a69a',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
-                    🔄 Reload Now
-                  </button>
-                )}
+                <div style={{background:isUser?'#2962ff22':'#1e222d',border:`1px solid ${isUser?'#2962ff44':'#2a2e39'}`,borderRadius:isUser?'10px 3px 10px 10px':'3px 10px 10px 10px',padding:'8px 11px',fontSize:12,lineHeight:1.65,color:'#d1d4dc',whiteSpace:'pre-wrap',wordBreak:'break-word'}}>
+                  {/* Strip the [thinking] prefix line if it was injected */}
+                  {msg.content.replace(/^🤔 \*\[DeepSeek reasoned.*?\]\*\n\n/,'')}
+                  {msg.type==='fileReq'&&(
+                    <button onClick={async()=>{
+                      try{
+                        const[fh]=await window.showOpenFilePicker({types:[{description:'HTML',accept:{'text/html':['.html']}}]});
+                        setLoading(true);
+                        addMsg('assistant',`📂 ${fh.name} selected — applying change...`);
+                        await applyCode(msg.req,fh);
+                      }catch(e){if(e.name!=='AbortError')addMsg('assistant',`❌ ${e.message}`);}
+                      finally{setLoading(false);}
+                    }} style={{display:'block',marginTop:8,background:'#2962ff',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                      📂 Select index.html
+                    </button>
+                  )}
+                  {msg.type==='success'&&(
+                    <button onClick={()=>location.reload()} style={{display:'block',marginTop:8,background:'#26a69a',border:'none',borderRadius:5,padding:'6px 14px',color:'#fff',cursor:'pointer',fontSize:11,fontWeight:600}}>
+                      🔄 Reload Now
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );
         })}
         {loading&&(
           <div style={{display:'flex',alignItems:'center',gap:8,color:'#787b86',fontSize:11,padding:'4px 0 4px 34px'}}>
-            <span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>⚙️</span> AI is thinking…
+            <span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>{provider==='deepseek'?'🐋':'⚙️'}</span>
+            {provider==='deepseek'?'DeepSeek-R1 reasoning locally…':'AI is thinking…'}
           </div>
         )}
         <div ref={endRef}/>
       </div>
 
+      {/* DeepSeek Auto-Analyze button — always visible when DeepSeek selected */}
+      {provider==='deepseek'&&(
+        <div style={{padding:'6px 12px',borderTop:'1px solid #2a2e39',flexShrink:0}}>
+          <button onClick={()=>{if(!loading)doAutoAnalyze();}} disabled={loading}
+            style={{width:'100%',background:loading?'#2a2e39':'linear-gradient(135deg,#1a2a4a,#0d3a6a)',border:'1px solid #2962ff44',borderRadius:7,color:loading?'#787b86':'#5b9bd5',fontSize:11,fontWeight:600,padding:'7px 0',cursor:loading?'default':'pointer',letterSpacing:.3}}>
+            🐋 Auto-Analyze with DeepSeek-R1 — Full Market Deep Dive
+          </button>
+        </div>
+      )}
       {/* Quick chips */}
       {messages.length<3&&(
         <div style={{padding:'6px 12px',display:'flex',gap:5,flexWrap:'wrap',borderTop:'1px solid #2a2e39',flexShrink:0}}>
-          {chips.map(c=>(
-            <button key={c} onClick={()=>{setInput(c);}} style={{background:'#1e222d',border:'1px solid #2a2e39',borderRadius:12,padding:'4px 10px',color:'#d1d4dc',fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
+          {(provider==='deepseek'?[
+            'Why is the signal showing LONG/SHORT?',
+            'Which modules have highest accuracy?',
+            'Is the NN prediction reliable?',
+            'Explain the module disagreement',
+            'What does L/S ratio mean here?',
+            'Should I trust the ghost candles?',
+          ]:chips).map(c=>(
+            <button key={c} onClick={()=>{setInput(c);}} style={{background:'#1e222d',border:`1px solid ${provider==='deepseek'?'#2962ff33':'#2a2e39'}`,borderRadius:12,padding:'4px 10px',color:'#d1d4dc',fontSize:10,cursor:'pointer',whiteSpace:'nowrap'}}>
               {c}
             </button>
           ))}
@@ -3715,10 +3877,16 @@ const App=()=>{
               symbol,tf,price:livePrice,
               biasScore:aiAdjustedBias?.score,biasLabel:aiAdjustedBias?.label,
               aiSignal:aiAdjustedBias?.aiSignal,aiOverride:aiAdjustedBias?.aiOverride,
+              htfBias:setup?.htf_bias,
               rsi:setup?.rsi,phase:setup?.phase,confidence:setup?.confidence,
               poc:setup?.vp_poc,vah:setup?.vp_vah,val:setup?.vp_val,
               sl:setup?.stop_loss,tp1:setup?.take_profit_1,tp2:setup?.take_profit_2,
-              nnProb:nnResult?.prob,nnAcc:nnResult?.accuracy,nnRecentAcc:nnResult?.recentAcc,nnCorrections:nnResult?.corrections,
+              // NN outputs
+              nnProb:nnResult?.prob,nnAcc:nnResult?.accuracy,nnRecentAcc:nnResult?.recentAcc,
+              nnCorrections:nnResult?.corrections,nnSignal:nnResult?.signal,nnConf:nnResult?.confidence,
+              nnMag:nnResult?.magnitude,nnVol:nnResult?.volatility,nnPoolSize:nnResult?.poolSize,
+              // All 12 module features with weights + accuracy
+              features:aiAdjustedBias?.features||[],
               macdHist:momentumSig?.signals?.macd?.hist,stochK:momentumSig?.signals?.stoch?.k,cmf:momentumSig?.signals?.cmf?.value,
               fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label,
               pdh:pdhl?.pdh,pdl:pdhl?.pdl,pdhSwept:pdhl?.sweptH,pdlSwept:pdhl?.sweptL,
