@@ -1224,69 +1224,94 @@ function calcRS(coinCandles,btcCandles,lookback=20){
 }
 
 function futureCandlesSim(candles,signal,atr,count,ctx){
-  // ctx = {momScore, microScore, vpData, macd, squeeze, rsiVal, bbData, cmf, stoch}
   const p0=candles[candles.length-1].close;
+  // ── Unpack ALL ctx signals ──
   const vp=ctx?.vpData||null;
   const rsi=ctx?.rsiVal||50;
   const bb=ctx?.bbData||null;
   const macd=ctx?.macd||{};
   const squeeze=ctx?.squeeze||false;
+  const momScore=ctx?.momScore||0;
+  const adxVal=ctx?.adxVal||0;
+  const biasScore=ctx?.biasScore||0;       // Master Bias -100..+100
+  const lsLongPct=ctx?.lsLongPct||50;     // crowd long %
+  const fundingRate=ctx?.fundingRate||0;   // futures funding rate
+  const stoch=ctx?.stoch||{};
+  const extraLevels=ctx?.keyLevels||[];    // VWAP, EMA200, PDH, PDL, ichi cloud
 
-  // ── NN inference (no new logging — prediction already logged by runNNPredict) ──
+  // ── NN inference ──
   let nnProb=null,nnMag=0.40,nnVol=0.35;
   if(_nnStats.totalCandles>=100){
-    try{
-      const inp=_buildSequenceInput(candles,candles.length-1);
-      if(inp){const out=_getNN().predict(inp);nnProb=out[0];nnMag=Math.max(0.05,out[1]);nnVol=Math.max(0.05,out[2]);}
-    }catch(_2){}
+    try{const inp=_buildSequenceInput(candles,candles.length-1);
+      if(inp){const out=_getNN().predict(inp);nnProb=out[0];nnMag=Math.max(0.05,out[1]);nnVol=Math.max(0.05,out[2]);}}
+    catch(_2){}
   }
 
-  // Confidence & final direction
+  // ── Direction: Master Bias overrides NN when conviction is strong ──
   const nnConf=nnProb!==null?Math.abs(nnProb-0.5)*2:0.25;
+  const nnDir=nnProb!==null&&_nnStats.totalCandles>=150?(nnProb>=0.54?1:nnProb<=0.46?-1:0):0;
+  const biasDir=Math.abs(biasScore)>30?Math.sign(biasScore):0;
   const fallbackDir=signal==='LONG'?1:-1;
-  const primaryDir=nnProb!==null&&_nnStats.totalCandles>=150
-    ?(nnProb>=0.54?1:nnProb<=0.46?-1:fallbackDir):fallbackDir;
+  // Priority: biasDir (strongest) > nnDir > fallbackDir
+  const primaryDir=biasDir!==0?biasDir:nnDir!==0?nnDir:fallbackDir;
 
-  // RSI dampening (extreme RSI = exhaustion, reduce body sizes)
+  // ── Body size multipliers ──
+  // RSI dampening: extreme RSI = exhaustion
   const rsiDamp=rsi>78?0.50:rsi<22?0.50:rsi>68?0.75:rsi<32?0.75:1.0;
+  // StochRSI dampening
+  const stochDamp=(stoch?.k||50)>80?0.85:(stoch?.k||50)<20?0.85:1.0;
+  // Bias strength: strong conviction → bigger decisive candles
+  const biasMult=Math.max(0.65,Math.min(1.6,1.0+Math.abs(biasScore)/150));
+  // Momentum: positive momentum aligned with direction → bigger bodies
+  const momMult=Math.max(0.65,Math.min(1.4,1.0+(momScore*primaryDir)/200));
+  // Crowd contra squeeze: if crowd is very wrong vs our direction → explosive potential
+  const crowdContra=(primaryDir>0&&lsLongPct<35)||(primaryDir<0&&lsLongPct>65);
+  const crowdMult=crowdContra?1.25:1.0;
 
-  // Measure recent ACTUAL candle sizes — ghost candles must be proportional to real ones
+  // Measure recent actual candle sizes
   const last20=candles.slice(-20);
   const avgBody=last20.reduce((s,c)=>s+Math.abs(c.close-c.open),0)/last20.length;
   const avgRange=last20.reduce((s,c)=>s+c.high-c.low,0)/last20.length||atr;
+  const baseBody=Math.max(avgBody*0.70,nnMag*2*atr)*biasMult*momMult*crowdMult;
+  const baseRange=Math.max(avgRange*0.60,nnVol*3*atr);
 
-  // Base sizes: NN magnitude/volatility calibrate direction & confidence,
-  // but floor is always 70% of recent actual candle body so ghosts look realistic.
-  // When NN is early/uncertain (low nnMag), real candle size still wins.
-  const baseBody=Math.max(avgBody*0.70, nnMag*2*atr);
-  const baseRange=Math.max(avgRange*0.60, nnVol*3*atr);
-
-  // ── STRUCTURE SEQUENCE ──
-  // ── STRUCTURE SEQUENCE — supports up to 50 candles with full pattern cycles ──
-  // highConf: Elliott-style 5-wave impulse with 3-wave corrections (repeating)
-  // medConf:  impulse → consolidation → breakout cycles
-  // lowConf:  ranging / H&S-like topping/bottoming structures
+  // ── STRUCTURE SEQUENCE — driven by squeeze, ADX, nnConf ──
   const seq=[];
-  if(nnConf>0.35){
-    // Elliott 5-wave pattern repeating: i-ii-iii-iv-v then corrective a-b-c
-    // wave:  imp cont cont pb  cont | pb   imp  cont pb  cont | pb  imp ...
-    const wave8=['impulse','continuation','continuation','pullback','continuation','pullback','inside','breakout'];
-    for(let i=0;i<count;i++) seq.push(wave8[i%wave8.length]);
-  } else if(nnConf>0.15){
-    // Consolidation breakout cycles: impulse → 3 inside → breakout → pullback → repeat
-    const wave6=['impulse','inside','inside','inside','breakout','pullback'];
-    for(let i=0;i<count;i++) seq.push(wave6[i%wave6.length]);
+  if(squeeze){
+    // BB squeeze = coiling → tight insides → explosive breakout in bias direction
+    const sqPat=['inside','inside','inside','range','inside','breakout','impulse','continuation'];
+    for(let i=0;i<count;i++) seq.push(sqPat[i%sqPat.length]);
+  } else if(adxVal>30||nnConf>0.35){
+    // Strong trend: Elliott 5-wave impulse + corrections
+    const w8=['impulse','continuation','continuation','pullback','continuation','pullback','inside','breakout'];
+    for(let i=0;i<count;i++) seq.push(w8[i%w8.length]);
+  } else if(adxVal>15||nnConf>0.15){
+    // Moderate: impulse-consolidation-breakout cycles
+    const w6=['impulse','inside','inside','inside','breakout','pullback'];
+    for(let i=0;i<count;i++) seq.push(w6[i%w6.length]);
   } else {
-    // Low confidence — ranging structure that can form H&S, double top/bottom
-    // Pattern: push up → retrace → push same high → retrace deeper → breakdown
-    const hsPat=['continuation','pullback','inside','continuation','pullback','inside','continuation','pullback','range','inside','pullback','range'];
-    for(let i=0;i<count;i++) seq.push(hsPat[i%hsPat.length]);
+    // Weak/ranging: H&S or double top/bottom structure
+    const hs=['continuation','pullback','inside','continuation','pullback','inside','continuation','pullback','range','inside','pullback','range'];
+    for(let i=0;i<count;i++) seq.push(hs[i%hs.length]);
   }
 
-  // Pinbar injection near VP / BB levels
-  if(vp||bb){
+  // MACD cross front-loads impulse candles at the start
+  if((macd.cross==='bull'&&primaryDir>0)||(macd.cross==='bear'&&primaryDir<0)){
+    seq[0]='impulse'; if(seq[1]!=='pullback') seq[1]='impulse';
+  }
+  // Crowd contra = squeeze incoming → explosive opener
+  if(crowdContra){seq[0]='impulse';if(seq[1]!=='pullback') seq[1]='impulse';}
+  // Extreme funding rate against direction → extra impulse (squeeze)
+  if(Math.abs(fundingRate)>0.001&&((fundingRate>0&&primaryDir<0)||(fundingRate<0&&primaryDir>0))){
+    seq[0]='impulse'; seq[1]='continuation';
+  }
+
+  // ── KEY LEVELS: VP + BB + VWAP + EMA200 + PDH/PDL + Ichimoku cloud ──
+  const keyLevels=[vp?.poc,vp?.vah,vp?.val,bb?.upper,bb?.lower,...extraLevels]
+    .filter(v=>v!=null&&isFinite(v)&&v>0);
+
+  if(keyLevels.length){
     let proj=p0;
-    const keyLevels=[vp?.poc,vp?.vah,vp?.val,bb?.upper,bb?.lower].filter(Boolean);
     for(let i=0;i<seq.length;i++){
       proj+=primaryDir*baseBody*(seq[i]==='pullback'?-0.38:seq[i]==='inside'?0.05:0.55)*Math.max(0.15,1-i*0.02);
       const near=keyLevels.some(l=>Math.abs(proj-l)/atr<0.9);
@@ -1299,64 +1324,35 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   const result=[];
   for(let i=0;i<count;i++){
     const type=seq[i]||'range';
-    // Decay: gentle slope so candle 50 is still ~40% of candle 1 (not flat)
-    // Formula: starts at 1.0, floors at 0.40 around candle 30, stays there
     const decay=Math.max(0.40,1-i*0.018);
     let bbFactor=1;
     if(bb){
       if(price>bb.upper&&primaryDir>0) bbFactor=0.35;
       if(price<bb.lower&&primaryDir<0) bbFactor=0.35;
     }
-
     let bodySize,wickH,wickL,candleDir;
-    const bd=baseBody*decay*rsiDamp;
+    const bd=baseBody*decay*rsiDamp*stochDamp;
     const rg=baseRange*decay;
     switch(type){
       case 'impulse':
-        candleDir=primaryDir;
-        bodySize=bd*bbFactor*(0.55+0.45*nnConf);
-        wickH=rg*0.15*(primaryDir>0?0.25:0.75);
-        wickL=rg*0.15*(primaryDir>0?0.75:0.25);
-        break;
+        candleDir=primaryDir; bodySize=bd*bbFactor*(0.55+0.45*nnConf);
+        wickH=rg*0.15*(primaryDir>0?0.25:0.75); wickL=rg*0.15*(primaryDir>0?0.75:0.25); break;
       case 'continuation':
-        candleDir=primaryDir;
-        bodySize=bd*0.55*bbFactor;
-        wickH=rg*0.12*(primaryDir>0?0.20:0.60);
-        wickL=rg*0.12*(primaryDir>0?0.60:0.20);
-        break;
+        candleDir=primaryDir; bodySize=bd*0.55*bbFactor;
+        wickH=rg*0.12*(primaryDir>0?0.20:0.60); wickL=rg*0.12*(primaryDir>0?0.60:0.20); break;
       case 'pullback':
-        candleDir=-primaryDir;
-        bodySize=bd*0.38; // Fibonacci 38.2% retracement
-        wickH=rg*0.10;
-        wickL=rg*0.10;
-        break;
+        candleDir=-primaryDir; bodySize=bd*0.38; wickH=rg*0.10; wickL=rg*0.10; break;
       case 'inside':
-        candleDir=primaryDir;
-        bodySize=bd*0.18;
-        wickH=rg*0.18;
-        wickL=rg*0.18;
-        break;
+        candleDir=primaryDir; bodySize=bd*0.18; wickH=rg*0.18; wickL=rg*0.18; break;
       case 'breakout':
-        candleDir=primaryDir;
-        bodySize=bd*0.88*bbFactor;
-        wickH=rg*0.08*(primaryDir>0?0.10:0.50);
-        wickL=rg*0.08*(primaryDir>0?0.50:0.10);
-        break;
+        candleDir=primaryDir; bodySize=bd*0.88*bbFactor;
+        wickH=rg*0.08*(primaryDir>0?0.10:0.50); wickL=rg*0.08*(primaryDir>0?0.50:0.10); break;
       case 'pinbar':
-        candleDir=-primaryDir*0.08; // tiny body, big rejection wick
-        bodySize=bd*0.07;
-        wickH=primaryDir>0?rg*0.72:rg*0.10;
-        wickL=primaryDir>0?rg*0.10:rg*0.72;
-        break;
-      case 'range':
-      default:
-        candleDir=(i%2===0?1:-1);
-        bodySize=bd*0.22;
-        wickH=rg*0.22;
-        wickL=rg*0.22;
-        break;
+        candleDir=-primaryDir*0.08; bodySize=bd*0.07;
+        wickH=primaryDir>0?rg*0.72:rg*0.10; wickL=primaryDir>0?rg*0.10:rg*0.72; break;
+      case 'range': default:
+        candleDir=(i%2===0?1:-1); bodySize=bd*0.22; wickH=rg*0.22; wickL=rg*0.22; break;
     }
-
     const o=price;
     const c=o+candleDir*Math.max(atr*0.0005,bodySize);
     const h=Math.max(o,c)+Math.max(0,wickH);
@@ -1400,7 +1396,13 @@ function generateSetup(candles,price){
   const _bb=calcBB(C);const _klt=calcKeltner(candles);
   const _squeeze=_bb&&_klt?_bb.upper<_klt.upper&&_bb.lower>_klt.lower:false;
   const _momSig=calcMomentumScore(candles);const _microSig=calcMicrostructureScore(candles);
-  const predCtx={momScore:_momSig.score,microScore:_microSig.score,vpData:vp,macd:_macd,squeeze:_squeeze,rsiVal:lRSI,bbData:_bb,cmf:_cmf,stoch:_stoch};
+  const C_adx=calcADX(H,L,C,14);const _adxVal=C_adx.adx[C_adx.adx.length-1]||0;
+  const _e200=calcEMA(C,Math.min(200,C.length-1));const _ema200=_e200[_e200.length-1]||0;
+  const _vwapArr=calcVWAP(candles);const _vwapVal=(_vwapArr[_vwapArr.length-1]||{}).value||0;
+  const _ichi=calcIchimoku(H,L,C);
+  const _ichiA=_ichi.senkouA[_ichi.senkouA.length-1]||0;
+  const _ichiB=_ichi.senkouB[_ichi.senkouB.length-1]||0;
+  const predCtx={momScore:_momSig.score,microScore:_microSig.score,vpData:vp,macd:_macd,squeeze:_squeeze,rsiVal:lRSI,bbData:_bb,cmf:_cmf,stoch:_stoch,adxVal:_adxVal,keyLevels:[_ema200,_vwapVal,_ichiA,_ichiB].filter(v=>v>0)};
   return{
     signal,htf_bias:htf,phase,bull_pct:bullPct,bear_pct:100-bullPct,
     rsi:lRSI.toFixed(1),atr:lATR.toFixed(price>100?2:6),
@@ -2758,7 +2760,15 @@ const App=()=>{
         const _bb2=calcBB(C2);const _klt2=calcKeltner(candles);
         const _sq2=_bb2&&_klt2?_bb2.upper<_klt2.upper&&_bb2.lower>_klt2.lower:false;
         const _mom2=calcMomentumScore(candles);const _mic2=calcMicrostructureScore(candles);
-        const ctx2={momScore:_mom2.score,microScore:_mic2.score,vpData:setup.vp,macd:_macd2,squeeze:_sq2,rsiVal:parseFloat(setup.rsi)||50,bbData:_bb2,cmf:_cmf2,stoch:_stoch2};
+        const _adxR2=calcADX(candles.map(c=>c.high),candles.map(c=>c.low),candles.map(c=>c.close),14);
+        const _adxV2=_adxR2.adx[_adxR2.adx.length-1]||0;
+        const _e2002=calcEMA(candles.map(c=>c.close),Math.min(200,candles.length-1));
+        const _ema2002=_e2002[_e2002.length-1]||0;
+        const _vwap2=calcVWAP(candles);const _vwapV2=(_vwap2[_vwap2.length-1]||{}).value||0;
+        const _ichi2=calcIchimoku(candles.map(c=>c.high),candles.map(c=>c.low),candles.map(c=>c.close));
+        const _iA2=_ichi2.senkouA[_ichi2.senkouA.length-1]||0;
+        const _iB2=_ichi2.senkouB[_ichi2.senkouB.length-1]||0;
+        const ctx2={momScore:_mom2.score,microScore:_mic2.score,vpData:setup.vp,macd:_macd2,squeeze:_sq2,rsiVal:parseFloat(setup.rsi)||50,bbData:_bb2,cmf:_cmf2,stoch:_stoch2,adxVal:_adxV2,biasScore:aiAdjustedBias?.score||0,lsLongPct:lsRatio?.longPct||50,fundingRate:oiFunding?.fundingRate||0,keyLevels:[_ema2002,_vwapV2,_iA2,_iB2,pdhl?.pdh,pdhl?.pdl].filter(v=>v&&v>0)};
         rawGhosts=futureCandlesSim(candles,masterSignal,lATR,50,ctx2);
       }catch(_2){rawGhosts=setup?.future_candles||[];}
     }
