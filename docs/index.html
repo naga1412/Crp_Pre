@@ -1426,6 +1426,10 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   const supAiOverride=ctx?.aiOverride??false; // NN overrode indicators?
   const supFeatures=ctx?.features||[];      // [{n,v,w,acc}] all 12 modules
   const supAccWeighted=ctx?.accWeightedConviction??null; // accuracy-weighted score
+  // ── Hybrid AI fields — injected when DeepSeek has also weighed in ──
+  const hybridActive=ctx?.hybridActive||false;
+  const hybridAgree=ctx?.hybridAgree||false;   // both AIs agree → high conviction
+  const hybridConflict=ctx?.hybridConflict||false; // AIs disagree → uncertainty
 
   // ── NN values: use pre-computed Supervisor result; only re-run if not provided ──
   let nnProb=supNNProb,nnMag=supNNMag??0.40,nnVol=supNNVol??0.35;
@@ -1478,12 +1482,15 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   const crowdMult=crowdContra?1.25:1.0;
   // Override penalty: when NN and indicators disagree → wider wicks, smaller bodies (chop)
   const overridePenalty=supAiOverride?0.80:1.0;
+  // ── Hybrid multipliers: DeepSeek agreement → bolder candles; conflict → tighter/choppier ──
+  const hybridBoost=hybridActive&&hybridAgree?1.12:1.0;   // both AIs agree: +12% body size
+  const hybridDamp=hybridActive&&hybridConflict?0.72:1.0; // AIs split: -28% body, expect chop
 
   const last20=candles.slice(-20);
   const avgBody=last20.reduce((s,c)=>s+Math.abs(c.close-c.open),0)/last20.length;
   const avgRange=last20.reduce((s,c)=>s+c.high-c.low,0)/last20.length||atr;
-  const baseBody=Math.max(avgBody*0.70,nnMag*2*atr)*biasMult*confMult*momMult*crowdMult*overridePenalty;
-  const baseRange=Math.max(avgRange*0.60,nnVol*3*atr)*(supAiOverride?1.3:1.0); // wider wicks if conflicted
+  const baseBody=Math.max(avgBody*0.70,nnMag*2*atr)*biasMult*confMult*momMult*crowdMult*overridePenalty*hybridBoost*hybridDamp;
+  const baseRange=Math.max(avgRange*0.60,nnVol*3*atr)*(supAiOverride?1.3:1.0)*(hybridConflict?1.25:1.0); // wider wicks if conflicted or AIs split
 
   // ════════════════════════════════════════════════════════════════════════
   // STRUCTURE SEQUENCE — Supervisor consensus decides pattern type
@@ -1493,7 +1500,15 @@ function futureCandlesSim(candles,signal,atr,count,ctx){
   // Moderate → consolidation-breakout
   // Weak/conflicted → ranging / H&S
   const seq=[];
-  if(squeeze){
+  if(hybridConflict){
+    // DeepSeek and Supervisor disagree → deep uncertainty, ranging structure
+    const conf=['range','pullback','inside','range','pullback','inside','continuation','pullback','range','inside','pullback','range'];
+    for(let i=0;i<count;i++) seq.push(conf[i%conf.length]);
+  } else if(hybridAgree&&!squeeze&&effectiveConf>0.45){
+    // Both AIs agree + decent confidence → front-load impulse, bold continuation
+    const bold=['impulse','impulse','continuation','pullback','impulse','continuation','pullback','inside','breakout','continuation'];
+    for(let i=0;i<count;i++) seq.push(bold[i%bold.length]);
+  } else if(squeeze){
     // BB squeeze: coiling → explosive breakout in Supervisor direction
     const sqPat=['inside','inside','inside','range','inside','breakout','impulse','continuation'];
     for(let i=0;i<count;i++) seq.push(sqPat[i%sqPat.length]);
@@ -2065,6 +2080,26 @@ function Sparkline({data,color,w=60,h=20}){
   const mn=Math.min(...data),mx=Math.max(...data),rng=mx-mn||1;
   const pts=data.map((v,i)=>`${(i/(data.length-1))*w},${h-(((v-mn)/rng)*h)}`).join(' ');
   return(<svg className="sparkline" width={w} height={h}><polyline points={pts} fill="none" stroke={color||'#787b86'} strokeWidth="1.5"/></svg>);
+}
+
+// ── Ollama structured JSON call — used by both chatbox AND hybrid analysis ──────
+// Returns parsed JSON object or throws. Lower temperature (0.2) for reliable JSON.
+async function callOllamaJSON(systemPrompt,userMsg,maxTokens=400){
+  const url=(localStorage.getItem('smc_ollama_url')||'http://localhost:11434')+'/api/chat';
+  const model=localStorage.getItem('smc_ollama_model')||'deepseek-r1:8b';
+  let resp;
+  try{resp=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({model,stream:false,
+      messages:[{role:'system',content:systemPrompt},{role:'user',content:userMsg}],
+      options:{num_predict:maxTokens,temperature:0.2}})});}
+  catch(e){throw new Error('Ollama offline: '+e.message);}
+  if(!resp.ok) throw new Error('Ollama '+resp.status);
+  const d=await resp.json();
+  // Ollama v0.7+ puts reasoning in message.thinking, answer in message.content
+  const raw=(d?.message?.content||d?.message?.thinking||'').trim();
+  const m=raw.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('No JSON in DeepSeek response');
+  return JSON.parse(m[0]);
 }
 
 // ─── AI CHAT TAB ─────────────────────────────────────────────────────────────
@@ -3107,6 +3142,8 @@ const App=()=>{
   const[pdhl,setPdhl]=useState(null);
   const[lsRatio,setLsRatio]=useState(null);
   const[rsData,setRsData]=useState(null);
+  const[deepSeekAnalysis,setDeepSeekAnalysis]=useState(null);
+  const[deepSeekLoading,setDeepSeekLoading]=useState(false);
 
   // Indicator toggles — persisted to localStorage
   const[indOn,setIndOn]=useState(()=>{
@@ -3207,7 +3244,9 @@ const App=()=>{
     };
     // ── Ghost candles: AI Supervisor has FULL CONTROL — always regenerate with complete Supervisor context ──
     // generateSetup() ghost candles are discarded; every render uses the 12-module + NN Supervisor output.
-    const masterSignal=aiAdjustedBias?.aiSignal||setup?.signal||'LONG'; // authoritative direction
+    // hybridBias overrides when DeepSeek has weighed in; falls back to Supervisor-only
+    const _activeBias=hybridBias||aiAdjustedBias;
+    const masterSignal=_activeBias?.aiSignal||setup?.signal||'LONG'; // authoritative direction
     let rawGhosts=setup?.future_candles||[];
     if(masterSignal&&masterSignal!=='NEUTRAL'&&candles?.length>55&&setup){
       try{
@@ -3226,28 +3265,35 @@ const App=()=>{
         const _iA2=_ichi2.senkouA[_ichi2.senkouA.length-1]||0;
         const _iB2=_ichi2.senkouB[_ichi2.senkouB.length-1]||0;
         // ── Full AI Supervisor context — every field that futureCandlesSim uses ──
-        const _supFeatures=aiAdjustedBias?.features||[];
+        // _activeBias = hybridBias when DeepSeek has weighed in, else pure Supervisor
+        const _supFeatures=_activeBias?.features||[];
         const _accWeighted=_supFeatures.reduce((sum,f)=>{
           const acc=_modAccStats[f.n]?.total>=10?_modAccStats[f.n].correct/_modAccStats[f.n].total:0.5;
           return sum+(f.v||0)*(f.w||0)*acc;
         },0);
+        // When hybrid is active, boost accWeightedConviction by DeepSeek conviction factor
+        const _dsBoost=_activeBias?.hybridActive&&_activeBias?.agree?(_activeBias.dsConviction||50)/100:1;
         const ctx2={
           // TA indicators
           momScore:_mom2.score,microScore:_mic2.score,vpData:setup.vp,
           macd:_macd2,squeeze:_sq2,rsiVal:parseFloat(setup.rsi)||50,
           bbData:_bb2,cmf:_cmf2,stoch:_stoch2,adxVal:_adxV2,
-          biasScore:aiAdjustedBias?.score||0,
+          biasScore:_activeBias?.score||0,
           lsLongPct:lsRatio?.longPct||50,
           fundingRate:oiFunding?.fundingRate||0,
           keyLevels:[_ema2002,_vwapV2,_iA2,_iB2,pdhl?.pdh,pdhl?.pdl].filter(v=>v&&v>0),
-          // ── AI Supervisor outputs — pre-computed, passed to futureCandlesSim to avoid re-running NN ──
+          // ── AI Supervisor + Hybrid outputs — pre-computed, passed to futureCandlesSim ──
           nnProb:nnResult?.prob??null,
           nnMag:nnResult?.magnitude??null,
           nnVol:nnResult?.volatility??null,
-          aiConf:(aiAdjustedBias?.mlConf||50)/100,
-          aiOverride:aiAdjustedBias?.aiOverride||false,
+          aiConf:(_activeBias?.mlConf||50)/100,
+          aiOverride:_activeBias?.aiOverride||false,
           features:_supFeatures,
-          accWeightedConviction:_accWeighted,
+          accWeightedConviction:_accWeighted*_dsBoost,
+          // Hybrid-specific: tighter ghost candles when AIs conflict, bolder when they agree
+          hybridActive:_activeBias?.hybridActive||false,
+          hybridAgree:_activeBias?.agree||false,
+          hybridConflict:_activeBias?.conflict||false,
         };
         rawGhosts=futureCandlesSim(candles,masterSignal,lATR,50,ctx2);
       }catch(_2){rawGhosts=setup?.future_candles||[];}
@@ -3285,7 +3331,7 @@ const App=()=>{
     markers.sort((a,b)=>a.time-b.time);
     cSeries.current.setMarkers(markers);
     if(hist.length) setPrevClose(hist[hist.length-1].close);
-  },[candles,setup,nd,futureCount,aiAdjustedBias]);
+  },[candles,setup,nd,futureCount,aiAdjustedBias,hybridBias]);
 
   // ── INDICATOR OVERLAY RENDERING ──
   useEffect(()=>{
@@ -3564,6 +3610,64 @@ const App=()=>{
     }catch(e){setError(e.message);}
     finally{if(!quiet)setLoading(false);}
   },[]);
+
+  // ── DeepSeek structured analysis — runs once per symbol/TF load ──────────────
+  // Returns JSON verdict that gets blended with AI Supervisor in calcHybridBias.
+  const runDeepSeekAnalysis=useCallback(async(ctx)=>{
+    const provider=localStorage.getItem('smc_ai_provider')||'deepseek';
+    if(provider!=='deepseek') return;
+    if(!ctx?.symbol) return;
+    setDeepSeekLoading(true);
+    try{
+      const mods=(ctx.features||[]);
+      let liveAcc={};
+      try{liveAcc=JSON.parse(localStorage.getItem('smc_mod_acc_v1')||'{}');}catch(_){}
+      const modSummary=mods.map(f=>{
+        const la=liveAcc[f.n];
+        const acc=la&&la.total>=10?Math.round(la.correct/la.total*100)+'%':'?';
+        return `${f.n}: score=${f.v>0?'+':''}${Math.round(f.v||0)} acc=${acc}`;
+      }).join(', ');
+      const sys=`You are a quantitative market analyst. Analyze the provided market data and respond with ONLY valid JSON — no prose, no markdown, no explanation outside the JSON.`;
+      const prompt=`Market: ${ctx.symbol} / ${ctx.tf} | Price: ${ctx.price}
+AI Supervisor Score: ${ctx.biasScore||0} (${ctx.biasLabel||'?'}) | Signal: ${ctx.aiSignal||'?'}
+NN prob=${ctx.nnProb!=null?Math.round(ctx.nnProb*100)+'%':'?'} acc=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% override=${ctx.aiOverride?'YES':'no'}
+12 Modules: ${modSummary}
+RSI=${ctx.rsi||'?'} L/S=${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%L':'?'} Funding=${ctx.fundingRate||'?'} FG=${ctx.fgValue||'?'}
+PDH=${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' SWEPT':''} PDL=${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' SWEPT':''}
+RS_vs_BTC=${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'}
+
+Return ONLY this JSON:
+{"signal":"LONG or SHORT or NEUTRAL","dsScore":-60 to +60,"conviction":0 to 100,"reason":"one sentence key factor","agree":["module names you agree with"],"disagree":["module names less reliable here"],"candle":"impulse or pullback or ranging or breakout"}`;
+      const result=await callOllamaJSON(sys,prompt,350);
+      // Validate required fields
+      if(!result.signal||result.dsScore==null) throw new Error('Incomplete JSON');
+      setDeepSeekAnalysis({...result,timestamp:Date.now(),symbol:ctx.symbol,tf:ctx.tf});
+    }catch(e){
+      // Don't crash app if DeepSeek is offline — just clear the analysis
+      setDeepSeekAnalysis(prev=>prev?.symbol===ctx?.symbol?prev:null);
+    }
+    setDeepSeekLoading(false);
+  },[]);
+
+  // Auto-run DeepSeek analysis when symbol/TF changes or after setup loads
+  const _dsRunRef=React.useRef(0);
+  useEffect(()=>{
+    if(!setup||!aiAdjustedBias||!masterBias) return;
+    const now=Date.now();
+    if(now-_dsRunRef.current<30000) return; // debounce: max once per 30s per symbol
+    _dsRunRef.current=now;
+    const ctx={
+      symbol,tf,price:livePrice,
+      biasScore:aiAdjustedBias?.score,biasLabel:aiAdjustedBias?.label,
+      aiSignal:aiAdjustedBias?.aiSignal,aiOverride:aiAdjustedBias?.aiOverride,
+      nnProb:nnResult?.prob,nnAcc:nnResult?.accuracy,nnRecentAcc:nnResult?.recentAcc,
+      fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label,
+      pdh:pdhl?.pdh,pdl:pdhl?.pdl,pdhSwept:pdhl?.sweptH,pdlSwept:pdhl?.sweptL,
+      lsLongPct:lsRatio?.longPct,rsScore:rsData?.rs,rsi:setup?.rsi,
+      features:aiAdjustedBias?.features||[],
+    };
+    runDeepSeekAnalysis(ctx);
+  },[symbol,tf,setup,aiAdjustedBias]);
 
   const loadMTFVP=useCallback(async(sym)=>{
     const tfs=['1w','1d','4h','1h'];
@@ -3899,6 +4003,43 @@ const App=()=>{
     };
   },[masterBias,nnResult]);
 
+  // ── Hybrid Decision: AI Supervisor (NN+12modules) × DeepSeek-R1 ──────────────
+  // Weights: Supervisor 65% | DeepSeek 35%
+  // When both agree → boost signal | When conflict → dampen + flag
+  const hybridBias=useMemo(()=>{
+    if(!aiAdjustedBias) return null;
+    if(!deepSeekAnalysis||deepSeekAnalysis.symbol!==symbol||deepSeekAnalysis.tf!==tf){
+      return{...aiAdjustedBias,source:'Supervisor',hybridActive:false};
+    }
+    const aiScore=aiAdjustedBias.score;
+    const dsScore=Math.max(-60,Math.min(60,deepSeekAnalysis.dsScore||0));
+    const aiDir=aiScore>=8?1:aiScore<=-8?-1:0;
+    const dsDir=dsScore>=8?1:dsScore<=-8?-1:0;
+    const agree=(aiDir===dsDir)||(aiDir===0)||(dsDir===0);
+    const conflict=!agree&&aiDir!==0&&dsDir!==0;
+    // Blend: agree → +10% boost, conflict → 30% dampen
+    let hybrid=Math.round(aiScore*0.65+dsScore*0.35);
+    if(agree&&aiDir!==0) hybrid=Math.round(hybrid*1.10); // conviction boost
+    if(conflict) hybrid=Math.round(hybrid*0.70);         // uncertainty dampen
+    hybrid=Math.max(-100,Math.min(100,hybrid));
+    const hybridSignal=hybrid>=8?'LONG':hybrid<=-8?'SHORT':'NEUTRAL';
+    const hybridLabel=hybrid>=25?'Strong Bull':hybrid>=8?'Bullish':hybrid<=-25?'Strong Bear':hybrid<=-8?'Bearish':'Neutral';
+    const hybridColor=hybrid>=8?'#26a69a':hybrid<=-8?'#ef5350':'#787b86';
+    const dsConviction=deepSeekAnalysis.conviction||50;
+    return{
+      ...aiAdjustedBias,
+      score:hybrid,label:hybridLabel,color:hybridColor,
+      aiSignal:hybridSignal,
+      supervisorScore:aiScore,supervisorSignal:aiAdjustedBias.aiSignal,
+      dsScore,dsSignal:deepSeekAnalysis.signal,dsConviction,
+      dsReason:deepSeekAnalysis.reason||'',
+      dsCandle:deepSeekAnalysis.candle||'',
+      dsAgree:deepSeekAnalysis.agree||[],dsDisagree:deepSeekAnalysis.disagree||[],
+      agree,conflict,
+      source:'Hybrid',hybridActive:true,
+    };
+  },[aiAdjustedBias,deepSeekAnalysis,symbol,tf]);
+
   return(
     <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'#131722'}}>
       {/* HEADER */}
@@ -3958,6 +4099,10 @@ const App=()=>{
               nnMag:nnResult?.magnitude,nnVol:nnResult?.volatility,nnPoolSize:nnResult?.poolSize,
               // All 12 module features with weights + accuracy
               features:aiAdjustedBias?.features||[],
+              deepSeekSignal:deepSeekAnalysis?.signal,deepSeekScore:deepSeekAnalysis?.dsScore,
+              deepSeekConviction:deepSeekAnalysis?.conviction,deepSeekReason:deepSeekAnalysis?.reason,
+              hybridScore:hybridBias?.score,hybridSignal:hybridBias?.aiSignal,
+              hybridActive:hybridBias?.hybridActive,hybridConflict:hybridBias?.conflict,
               macdHist:momentumSig?.signals?.macd?.hist,stochK:momentumSig?.signals?.stoch?.k,cmf:momentumSig?.signals?.cmf?.value,
               fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label,
               pdh:pdhl?.pdh,pdl:pdhl?.pdl,pdhSwept:pdhl?.sweptH,pdlSwept:pdhl?.sweptL,
@@ -4063,6 +4208,47 @@ const App=()=>{
                 </div>
               </div>
 
+              {/* ── Hybrid AI Decision (DeepSeek + Supervisor combined) ── */}
+              {(hybridBias?.hybridActive||deepSeekLoading)&&(
+                <div style={{margin:'0 0 8px',padding:'10px 12px',background:'linear-gradient(135deg,#0d1117,#0d1a2e)',borderRadius:8,border:`2px solid ${hybridBias?.color||'#2962ff'}66`}}>
+                  <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8}}>
+                    <span style={{fontSize:10,fontWeight:700,color:'#5b9bd5'}}>🤝 Hybrid Decision</span>
+                    <span style={{fontSize:9,color:'#787b86'}}>Supervisor + DeepSeek-R1</span>
+                    {deepSeekLoading&&<span style={{fontSize:9,color:'#ab47bc',marginLeft:'auto',display:'flex',alignItems:'center',gap:3}}><span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>🐋</span>Analyzing…</span>}
+                  </div>
+                  {hybridBias?.hybridActive&&!deepSeekLoading&&(
+                    <>
+                      {/* Three-way verdict */}
+                      <div style={{display:'grid',gridTemplateColumns:'1fr auto 1fr',gap:4,marginBottom:8,alignItems:'center'}}>
+                        <div style={{textAlign:'center',padding:'6px 4px',background:'#1e222d',borderRadius:6,border:'1px solid #2a2e39'}}>
+                          <div style={{fontSize:9,color:'#787b86',marginBottom:2}}>🧠 Supervisor</div>
+                          <div style={{fontSize:13,fontWeight:700,color:hybridBias.supervisorSignal==='LONG'?'#26a69a':hybridBias.supervisorSignal==='SHORT'?'#ef5350':'#787b86'}}>{hybridBias.supervisorSignal}</div>
+                          <div style={{fontSize:10,color:'#787b86'}}>{hybridBias.supervisorScore>0?'+':''}{hybridBias.supervisorScore}</div>
+                        </div>
+                        <div style={{textAlign:'center'}}>
+                          <div style={{fontSize:16}}>{hybridBias.agree?'🤝':'⚠️'}</div>
+                          <div style={{fontSize:8,color:hybridBias.agree?'#26a69a':'#ff9800'}}>{hybridBias.agree?'agree':'split'}</div>
+                        </div>
+                        <div style={{textAlign:'center',padding:'6px 4px',background:'#1a2a3a',borderRadius:6,border:'1px solid #2962ff33'}}>
+                          <div style={{fontSize:9,color:'#787b86',marginBottom:2}}>🐋 DeepSeek</div>
+                          <div style={{fontSize:13,fontWeight:700,color:hybridBias.dsSignal==='LONG'?'#26a69a':hybridBias.dsSignal==='SHORT'?'#ef5350':'#787b86'}}>{hybridBias.dsSignal}</div>
+                          <div style={{fontSize:10,color:'#787b86'}}>Conv {hybridBias.dsConviction}%</div>
+                        </div>
+                      </div>
+                      {/* Combined result */}
+                      <div style={{textAlign:'center',padding:'8px',background:hybridBias.color+'11',borderRadius:6,border:`1px solid ${hybridBias.color}33`,marginBottom:6}}>
+                        <div style={{fontSize:9,color:'#787b86',marginBottom:2}}>Combined Signal</div>
+                        <div style={{fontSize:20,fontWeight:800,color:hybridBias.color,fontFamily:'monospace'}}>{hybridBias.aiSignal}</div>
+                        <div style={{fontSize:11,color:hybridBias.color}}>{hybridBias.label} · {hybridBias.score>0?'+':''}{hybridBias.score}</div>
+                      </div>
+                      {hybridBias.dsReason&&<p style={{fontSize:10,color:'#787b86',fontStyle:'italic',marginBottom:4}}>🐋 "{hybridBias.dsReason}"</p>}
+                      {hybridBias.dsCandle&&<p style={{fontSize:9,color:'#5b9bd5'}}>Next candle prediction: <b style={{color:'#d1d4dc'}}>{hybridBias.dsCandle}</b></p>}
+                      {hybridBias.conflict&&<p style={{fontSize:9,color:'#ff9800',marginTop:4}}>⚠️ Supervisor vs DeepSeek conflict — reduce position size, wait for confirmation</p>}
+                      {hybridBias.agree&&hybridBias.aiDir!==0&&<p style={{fontSize:9,color:'#26a69a',marginTop:4}}>✓ Both AIs agree — higher conviction setup</p>}
+                    </>
+                  )}
+                </div>
+              )}
               {aiAdjustedBias&&(
                 <div style={{margin:'0 0 8px',padding:'10px 12px',background:'#131722',borderRadius:8,border:`2px solid ${aiAdjustedBias.color}44`}}>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}}>
