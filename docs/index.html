@@ -461,6 +461,42 @@ function calcSentimentScore(fg,nd){
   if(nd){const{bullish=0,bearish=0}=nd.overall_sentiment||{};const tot=bullish+bearish||1;sc+=Math.max(-10,Math.min(10,(bullish-bearish)/tot*10));}
   return{score:Math.max(-50,Math.min(50,sc))};
 }
+// ─── TA INDICATOR SCORE (EMA200, SAR, VWAP, Ichimoku, ADX, OBV, MFI, CCI, W%R) ──
+function calcTAIndicatorScore(candles,price){
+  if(!candles||candles.length<50||price==null) return 0;
+  const C=candles.map(c=>c.close),H=candles.map(c=>c.high),L=candles.map(c=>c.low),V=candles.map(c=>c.volume||0);
+  let sc=0;
+  // EMA200 — big-picture trend filter (most important)
+  try{const e200=calcEMA(C,Math.min(200,C.length-1));const v200=e200[e200.length-1];if(v200) sc+=price>v200?18:-18;}catch(_){}
+  // Parabolic SAR — trend direction
+  try{const sar=calcPSAR(H,L);const lSar=sar[sar.length-1];if(lSar) sc+=price>lSar?12:-12;}catch(_){}
+  // VWAP — fair value reference (daily)
+  try{const vwap=calcVWAP(candles);const lV=vwap[vwap.length-1];if(lV) sc+=price>lV?10:-10;}catch(_){}
+  // Ichimoku Cloud — price position relative to cloud
+  try{
+    const ichi=calcIchimoku(H,L,C);
+    const lA=ichi.senkouA[ichi.senkouA.length-1],lB=ichi.senkouB[ichi.senkouB.length-1];
+    if(lA&&lB){const top=Math.max(lA,lB),bot=Math.min(lA,lB);
+      sc+=price>top?14:price<bot?-14:0; // above cloud / below cloud / inside=0
+    }
+  }catch(_){}
+  // ADX + DI — trend strength + direction
+  try{
+    const adxR=calcADX(H,L,C,14);
+    const adxVal=adxR.adx[adxR.adx.length-1]||0,pdi=adxR.pdi[adxR.pdi.length-1]||0,ndi=adxR.ndi[adxR.ndi.length-1]||0;
+    if(adxVal>20) sc+=(pdi>ndi?1:-1)*Math.min(12,adxVal*0.4); // strong trend in DI direction
+  }catch(_){}
+  // OBV trend — 10-bar slope (buying vs selling volume pressure)
+  try{const obv=calcOBV(C,V);if(obv.length>10) sc+=obv[obv.length-1]>obv[obv.length-10]?8:-8;}catch(_){}
+  // MFI — money flow overbought/oversold
+  try{const mfi=calcMFI(H,L,C,V,14);const lM=mfi[mfi.length-1];if(lM!=null) sc+=lM<20?12:lM>80?-12:lM<40?5:lM>60?-5:0;}catch(_){}
+  // CCI — momentum extremes
+  try{const cci=calcCCI(H,L,C,20);const lC=cci[cci.length-1];if(lC!=null) sc+=lC>100?-8:lC<-100?8:lC>0?3:-3;}catch(_){}
+  // Williams %R — overbought/oversold
+  try{const wpr=calcWilliamsR(H,L,C,14);const lW=wpr[wpr.length-1];if(lW!=null) sc+=lW<-80?10:lW>-20?-10:0;}catch(_){}
+  return Math.max(-100,Math.min(100,Math.round(sc)));
+}
+
 // ─── SCORE HELPERS for new analysis modules ───────────────────────────────────
 function scorePDHL(pdhl,price){
   if(!pdhl||price==null) return 0;
@@ -507,7 +543,7 @@ function scoreRS(rsData){
   return 0;
 }
 
-function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlSig,lsSig,rsSig){
+function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlSig,lsSig,rsSig,taSig){
   if(!setup) return null;
   const bPct=setup.bull_pct||50;
   const smcRaw=(bPct-50)*2;
@@ -528,6 +564,7 @@ function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pd
     {n:'PDH/PDL Sweep',v:pdhlSig,               w:0.10},
     {n:'L/S Ratio',    v:lsSig,                  w:0.09},
     {n:'RS vs BTC',    v:rsSig,                  w:0.08},
+    {n:'TA Indicators', v:taSig||0,              w:0.09},
   ];
   const weighted=features.reduce((a,f)=>a+f.v*f.w,0);
   const mlBoost=weighted*0.10;
@@ -1873,6 +1910,9 @@ Current live market state (use if relevant to the question):
 - Entry: current price | SL: ${ctx.sl||'?'} | TP1: ${ctx.tp1||'?'} | TP2: ${ctx.tp2||'?'}
 - NN: prob=${ctx.nnProb!=null?(ctx.nnProb*100).toFixed(0)+'%':'?'} accuracy=${ctx.nnRecentAcc||ctx.nnAcc||'?'}% corrections=${ctx.nnCorrections||0}
 - OI Funding: ${ctx.fundingRate||'?'} | Fear & Greed: ${ctx.fgValue||'?'} (${ctx.fgLabel||'?'})
+- PDH: ${ctx.pdh!=null?ctx.pdh.toFixed(4):'?'}${ctx.pdhSwept?' [SWEPT ⚡]':''} | PDL: ${ctx.pdl!=null?ctx.pdl.toFixed(4):'?'}${ctx.pdlSwept?' [SWEPT ⚡]':''}
+- L/S Ratio: Long ${ctx.lsLongPct!=null?ctx.lsLongPct.toFixed(1)+'%':'?'} / Short ${ctx.lsShortPct!=null?ctx.lsShortPct.toFixed(1)+'%':'?'}${ctx.lsLongPct>65?' — crowd overly Long (bearish lean)':ctx.lsShortPct>65?' — crowd overly Short (bullish lean)':''}
+- RS vs BTC (20-bar): Coin ${ctx.rsCoinChg!=null?(ctx.rsCoinChg>=0?'+':'')+ctx.rsCoinChg.toFixed(2)+'%':'?'} | BTC ${ctx.rsBtcChg!=null?(ctx.rsBtcChg>=0?'+':'')+ctx.rsBtcChg.toFixed(2)+'%':'?'} | RS Delta ${ctx.rsScore!=null?(ctx.rsScore>=0?'+':'')+ctx.rsScore.toFixed(2)+'%':'?'} (${ctx.rsSignal||'?'})
 `:'';
     const sys=`You are a helpful, friendly AI assistant. You are embedded inside SMC Pro Analyzer, a professional crypto & stock trading tool, but you can help with ANY topic — not just trading.
 ${marketCtxStr}
@@ -3142,11 +3182,12 @@ const App=()=>{
   const _signalHoldCount=React.useRef(0);
 
   const masterBias=useMemo(()=>{
-    // Compute scores for the 3 new modules (live state → score number)
+    // Compute scores for the new modules (live state → score number)
     const pdhlScore=scorePDHL(pdhl,price);
     const lsScore=scoreLSRatio(lsRatio);
     const rsScore=scoreRS(rsData);
-    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlScore,lsScore,rsScore);
+    const taScore=calcTAIndicatorScore(candles,price); // EMA200+SAR+VWAP+Ichimoku+ADX+OBV+MFI+CCI+W%R
+    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlScore,lsScore,rsScore,taScore);
     if(!raw) return null;
     // EMA smoothing: 65% weight to history, 35% to new reading
     // Result: signal needs several consistent ticks in same direction to actually flip
@@ -3170,7 +3211,7 @@ const App=()=>{
     const newLabel=s>=25?'Strong Bull':s>=8?'Bullish':s<=-25?'Strong Bear':s<=-8?'Bearish':'Neutral';
     const newColor=s>=8?'#26a69a':s<=-8?'#ef5350':'#787b86';
     return{...raw,score:s,rawInstant:raw.score,label:newLabel,color:newColor};
-  },[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhl,lsRatio,rsData]);
+  },[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhl,lsRatio,rsData,candles]);
 
   // ── AI SUPERVISOR ADJUSTMENT ──
   // Blends NN probability into Master Bias Score.
@@ -3265,7 +3306,10 @@ const App=()=>{
               sl:setup?.stop_loss,tp1:setup?.take_profit_1,tp2:setup?.take_profit_2,
               nnProb:nnResult?.prob,nnAcc:nnResult?.accuracy,nnRecentAcc:nnResult?.recentAcc,nnCorrections:nnResult?.corrections,
               macdHist:momentumSig?.signals?.macd?.hist,stochK:momentumSig?.signals?.stoch?.k,cmf:momentumSig?.signals?.cmf?.value,
-              fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label
+              fundingRate:oiFunding?.fundingRate,fgValue:fearGreed?.value,fgLabel:fearGreed?.label,
+              pdh:pdhl?.pdh,pdl:pdhl?.pdl,pdhSwept:pdhl?.sweptH,pdlSwept:pdhl?.sweptL,
+              lsLongPct:lsRatio?.longPct,lsShortPct:lsRatio?.shortPct,
+              rsCoinChg:rsData?.coinChg,rsBtcChg:rsData?.btcChg,rsScore:rsData?.rs,rsSignal:rsData?.signal
             }}/>
           </div>
         )}
@@ -3426,7 +3470,7 @@ const App=()=>{
               {/* ── PDH / PDL ── */}
               {pdhl && (
                 <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
-                  <div style={{color:'#888',fontWeight:600,marginBottom:4}}>PDH / PDL</div>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>PDH / PDL <Info text="Previous Day High (PDH) & Previous Day Low (PDL) — the most watched liquidity levels in futures trading. Smart money (institutions) push price above PDH or below PDL to collect stop-loss orders (liquidity sweep), then reverse. ⚡ SWEPT means price crossed this level in the last 5 candles. PDL swept + price back above it = strong LONG setup (bullish manipulation). PDH swept + price back below it = strong SHORT setup (bearish manipulation). These sweeps feed directly into the Master Bias Score."/></div>
                   <div style={{display:'flex',gap:8,alignItems:'center'}}>
                     <span style={{color:'#ef5350'}}>PDH {pdhl.pdh?.toFixed(4)}</span>
                     {pdhl.sweptH && <span style={{background:'#ef5350',color:'#fff',borderRadius:3,padding:'1px 5px',fontSize:9,fontWeight:700}}>SWEPT ⚡</span>}
@@ -3441,7 +3485,7 @@ const App=()=>{
               {/* ── LONG / SHORT RATIO ── */}
               {lsRatio && (
                 <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
-                  <div style={{color:'#888',fontWeight:600,marginBottom:6}}>LONG / SHORT RATIO</div>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:6,display:'flex',alignItems:'center',gap:4}}>LONG / SHORT RATIO <Info text="Global Long/Short Account Ratio from Binance Futures — shows what % of all open accounts are currently holding LONG vs SHORT positions. This is a CONTRARIAN indicator: the crowd is usually wrong at extremes. When >65% of traders are Long, smart money often reverses the market down to liquidate them (a long squeeze). When >65% Short, a short squeeze becomes likely. Refreshes every 5 minutes. Contributes directly to the Master Bias Score."/></div>
                   <div style={{display:'flex',gap:4,alignItems:'center',marginBottom:4}}>
                     <div style={{flex:lsRatio.longPct,background:'#26a69a',height:6,borderRadius:3,transition:'flex .5s'}}/>
                     <div style={{flex:lsRatio.shortPct,background:'#ef5350',height:6,borderRadius:3,transition:'flex .5s'}}/>
@@ -3458,7 +3502,7 @@ const App=()=>{
               {/* ── RELATIVE STRENGTH vs BTC ── */}
               {rsData && (
                 <div style={{background:'#131722',borderRadius:6,padding:'8px 10px',marginBottom:8,fontSize:11}}>
-                  <div style={{color:'#888',fontWeight:600,marginBottom:4}}>RELATIVE STRENGTH vs BTC</div>
+                  <div style={{color:'#888',fontWeight:600,marginBottom:4,display:'flex',alignItems:'center',gap:4}}>RELATIVE STRENGTH vs BTC <Info text="Measures how this coin performs compared to Bitcoin over the last 20 candles. RS Delta = Coin % change minus BTC % change. OUTPERFORMING (green): coin rises while BTC drops or rises less — institutional accumulation signal, strong LONG candidate. UNDERPERFORMING (red): coin drops while BTC holds or rises — smart money is distributing, SHORT candidate. RS >+2%: 'Coin refuses to drop' — best long setups come from coins showing relative strength. RS <-2%: 'Coin refuses to pump' — best short candidates. Contributes to Master Bias Score."/></div>
                   <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
                     <div>
                       <div style={{color:'#aaa',fontSize:10}}>Coin {rsData.coinChg>=0?'+':''}{rsData.coinChg.toFixed(2)}%</div>
