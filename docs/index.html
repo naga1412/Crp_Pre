@@ -461,7 +461,53 @@ function calcSentimentScore(fg,nd){
   if(nd){const{bullish=0,bearish=0}=nd.overall_sentiment||{};const tot=bullish+bearish||1;sc+=Math.max(-10,Math.min(10,(bullish-bearish)/tot*10));}
   return{score:Math.max(-50,Math.min(50,sc))};
 }
-function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price){
+// ─── SCORE HELPERS for new analysis modules ───────────────────────────────────
+function scorePDHL(pdhl,price){
+  if(!pdhl||price==null) return 0;
+  const{pdh,pdl,sweptH,sweptL}=pdhl;
+  // Swept PDL + price back above PDL → Smart Money collected liquidity → LONG
+  if(sweptL&&pdl&&price>pdl) return 30;
+  // Swept PDH + price back below PDH → Smart Money distributed → SHORT
+  if(sweptH&&pdh&&price<pdh) return -30;
+  // Still above PDH (potential breakout) or still below PDL (breakdown)
+  if(sweptH&&pdh&&price>pdh) return 10;
+  if(sweptL&&pdl&&price<pdl) return -10;
+  // No sweep: price near PDH = resistance (-10), near PDL = support (+10)
+  if(pdh&&pdl){
+    const range=pdh-pdl;
+    if(range>0){
+      const pos=(price-pdl)/range; // 0=at PDL, 1=at PDH
+      if(pos>0.9) return -10;     // hugging PDH resistance
+      if(pos<0.1) return 10;      // hugging PDL support
+    }
+  }
+  return 0;
+}
+function scoreLSRatio(lsRatio){
+  if(!lsRatio) return 0;
+  const{longPct}=lsRatio;
+  // Contrarian: crowd extremes are usually wrong
+  if(longPct>=70) return -35;   // extremely crowded long → SHORT lean
+  if(longPct>=65) return -25;
+  if(longPct>=60) return -12;
+  if(longPct<=30) return 35;    // extremely crowded short → LONG lean
+  if(longPct<=35) return 25;
+  if(longPct<=40) return 12;
+  return 0;
+}
+function scoreRS(rsData){
+  if(!rsData) return 0;
+  const{rs}=rsData;
+  if(rs>=4)  return 35;   // massively outperforming BTC → strong LONG signal
+  if(rs>=2)  return 20;
+  if(rs>=1)  return 10;
+  if(rs<=-4) return -35;  // massively underperforming BTC → strong SHORT signal
+  if(rs<=-2) return -20;
+  if(rs<=-1) return -10;
+  return 0;
+}
+
+function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlSig,lsSig,rsSig){
   if(!setup) return null;
   const bPct=setup.bull_pct||50;
   const smcRaw=(bPct-50)*2;
@@ -470,10 +516,18 @@ function calcMasterBias(setup,momSig,microSig,oiSig,imSig,sentSig,mtfVP,price){
   let vpRaw=0;
   if(mtfVP&&price!=null){const W={'1w':40,'1d':30,'4h':20,'1h':10};let ws=0,wt=0;for(const[t,w]of Object.entries(W)){const vp=mtfVP[t];if(vp){wt+=w;ws+=(price>vp.poc?w:-w*0.5);}}if(wt>0)vpRaw=Math.round(ws/wt*100);}
   const features=[
-    {n:'SMC',v:smcRaw,w:0.20},{n:'Wyckoff',v:wyRaw,w:0.10},{n:'VP',v:vpRaw,w:0.10},
-    {n:'OI/Funding',v:oiSig?.score||0,w:0.10},{n:'Momentum',v:momSig?.score||0,w:0.10},
-    {n:'Microstructure',v:microSig?.score||0,w:0.10},{n:'Sentiment',v:sentSig?.score||0,w:0.05},
-    {n:'Intermarket',v:imSig?.score||0,w:0.05},
+    {n:'SMC',          v:smcRaw,               w:0.18},
+    {n:'Wyckoff',      v:wyRaw,                 w:0.09},
+    {n:'VP',           v:vpRaw,                 w:0.09},
+    {n:'OI/Funding',   v:oiSig?.score||0,       w:0.09},
+    {n:'Momentum',     v:momSig?.score||0,       w:0.09},
+    {n:'Microstructure',v:microSig?.score||0,   w:0.09},
+    {n:'Sentiment',    v:sentSig?.score||0,      w:0.05},
+    {n:'Intermarket',  v:imSig?.score||0,        w:0.05},
+    // ── New analytical modules ──────────────────────────────
+    {n:'PDH/PDL Sweep',v:pdhlSig,               w:0.10},
+    {n:'L/S Ratio',    v:lsSig,                  w:0.09},
+    {n:'RS vs BTC',    v:rsSig,                  w:0.08},
   ];
   const weighted=features.reduce((a,f)=>a+f.v*f.w,0);
   const mlBoost=weighted*0.10;
@@ -3088,7 +3142,11 @@ const App=()=>{
   const _signalHoldCount=React.useRef(0);
 
   const masterBias=useMemo(()=>{
-    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price);
+    // Compute scores for the 3 new modules (live state → score number)
+    const pdhlScore=scorePDHL(pdhl,price);
+    const lsScore=scoreLSRatio(lsRatio);
+    const rsScore=scoreRS(rsData);
+    const raw=calcMasterBias(setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhlScore,lsScore,rsScore);
     if(!raw) return null;
     // EMA smoothing: 65% weight to history, 35% to new reading
     // Result: signal needs several consistent ticks in same direction to actually flip
@@ -3112,7 +3170,7 @@ const App=()=>{
     const newLabel=s>=25?'Strong Bull':s>=8?'Bullish':s<=-25?'Strong Bear':s<=-8?'Bearish':'Neutral';
     const newColor=s>=8?'#26a69a':s<=-8?'#ef5350':'#787b86';
     return{...raw,score:s,rawInstant:raw.score,label:newLabel,color:newColor};
-  },[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price]);
+  },[setup,momentumSig,microSig,oiSig,imSig,sentSig,mtfVP,price,pdhl,lsRatio,rsData]);
 
   // ── AI SUPERVISOR ADJUSTMENT ──
   // Blends NN probability into Master Bias Score.
