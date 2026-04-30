@@ -34,49 +34,78 @@ A professional-grade technical analysis platform with Smart Money Concepts (SMC)
 ## Project Structure
 
 ```
-claude/
+.
 ├── backend/
-│   ├── main.py          # FastAPI app — REST endpoints, WebSocket proxy, news fetcher
-│   └── ta_logic.py      # TA engine — SMC, Wyckoff, MTF, pattern detection, prediction
-└── frontend/
-    └── index.html       # Single-file React app with LightweightCharts
+│   ├── main.py            # FastAPI app — REST endpoints, WebSocket proxy, news fetcher
+│   ├── ta_logic.py        # TA engine — SMC, Wyckoff, MTF, pattern detection, projection
+│   └── requirements.txt   # Pinned Python dependencies
+├── frontend/
+│   └── index.html         # Single-file React app served against the backend
+└── docs/                  # Standalone GitHub Pages build (separate, no backend)
+    └── README.md
 ```
+
+The `docs/` directory contains a different, self-contained build of the app
+that talks directly to Binance/yFinance from the browser. It is not used by
+the backend-driven flow described below — see `docs/README.md`.
 
 ---
 
 ## Setup & Run
 
-### Requirements
-```
-pip install fastapi uvicorn websockets requests yfinance pandas numpy ta
-```
+### 1. Backend
 
-### Start Backend
 ```bash
 cd backend
+pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### Start Frontend
+Optional environment variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `CORS_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Comma-separated list of allowed origins |
+| `LOG_LEVEL` | `INFO` | Python logging level |
+| `STOCK_POLL_INTERVAL` | `15` | Seconds between yFinance polls per stock WS client |
+
+### 2. Frontend
+
 ```bash
-# Serve index.html on port 3000 (any static server)
 cd frontend
 python -m http.server 3000
 ```
 
 Open `http://localhost:3000` in your browser.
 
+To point the frontend at a different backend, set `window.__SMC_CONFIG__`
+**before** the bundled scripts run, e.g. by editing `index.html`:
+
+```html
+<script>
+  window.__SMC_CONFIG__ = {
+    api: 'https://api.example.com',
+    ws:  'wss://api.example.com',
+  };
+</script>
+```
+
 ---
 
 ## Usage
 
-- **Symbol Search** — Click the symbol button (top-left) to search crypto, stocks, ETFs, commodities, indices
-- **Timeframes** — Switch between 1m / 5m / 15m / 1h / 4h / 1d / 1w
-- **Future Candles** — Enter a number in the `🕯 Candles:` input to control how many predicted candles appear (leave blank for auto)
-- **News** — Right panel shows live news filtered by category; HIGH IMPACT stories highlighted in red
+- **Symbol Search** — click the symbol button (top-left) to search crypto, stocks, ETFs, commodities, indices.
+- **Timeframes** — switch between 1m / 5m / 15m / 1h / 4h / 1d / 1w.
+- **Future Candles** — enter a number in the `🕯 Candles:` input to control how many projected candles appear (leave blank for auto).
+- **News** — right panel shows aggregated headlines filtered by category; HIGH IMPACT items highlighted in red.
+
+> The "future candle" projection is a deterministic walk toward TP1 with
+> small noise — useful as a visual guide, not an AI forecast.
 
 ---
 
 ## Disclaimer
 
-This tool is for educational and informational purposes only. Not financial advice. Always do your own research.
+This tool is for educational and informational purposes only. Not financial
+advice. Always do your own research. The displayed liquidation levels are
+approximations and do not reflect any specific exchange's margin tiers.

@@ -4,11 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>SMC Pro — Crypto & Stock Analyzer</title>
-<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<!-- Override API/WS endpoints by setting window.__SMC_CONFIG__ before this script tag -->
+<script>window.__SMC_CONFIG__ = window.__SMC_CONFIG__ || {};</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script>
   tailwind.config = {
@@ -69,7 +71,8 @@
   .nbull{background:#26a69a22;color:#26a69a;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
   .nbear{background:#ef535022;color:#ef5350;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
   .nneutral{background:#787b8622;color:#787b86;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:700}
-  .nmacro{background:#ff980022;color:#ff9800;font-size:9px;padding:2px 5px;border-radius:3px;font-weight:600}
+
+  @keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -77,11 +80,18 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
-const API = 'http://127.0.0.1:8000';
-const WS  = 'ws://127.0.0.1:8000';
+// Endpoints — override via window.__SMC_CONFIG__ = { api: '...', ws: '...' }
+const _CFG = window.__SMC_CONFIG__ || {};
+const API = _CFG.api || `${location.protocol}//${location.hostname}:8000`;
+const WS  = _CFG.ws  || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}:8000`;
 
 // ── tiny helpers ────────────────────────────────────────────────────────────
 const TIMEFRAMES = ['1m','5m','15m','1h','4h','1d','1w'];
+
+// Seconds per timeframe — single source of truth for chart projection.
+const TF_SECS = {'1m':60,'3m':180,'5m':300,'15m':900,'30m':1800,
+  '1h':3600,'2h':7200,'4h':14400,'6h':21600,'8h':28800,'12h':43200,
+  '1d':86400,'3d':259200,'1w':604800};
 
 function smartDec(p){
   if(!p||p<=0)return 2;
@@ -298,6 +308,10 @@ const App=()=>{
   // ── chart init ──────────────────────────────────────────────────────────
   useEffect(()=>{
     if(!chartRef.current||chartInst.current) return;
+    if(typeof LightweightCharts==='undefined'){
+      setError('Chart library failed to load. Check your network.');
+      return;
+    }
     const chart = LightweightCharts.createChart(chartRef.current,{
       width:  chartRef.current.clientWidth,
       height: chartRef.current.clientHeight,
@@ -330,6 +344,10 @@ const App=()=>{
     return()=>{window.removeEventListener('resize',resize);chart.remove();chartInst.current=null};
   },[]);
 
+  // Track the timestamp of the last real bar so live WS updates can never
+  // overwrite a future/predicted bar (LightweightCharts requires monotonic time).
+  const lastRealTimeRef = useRef(0);
+
   // ── render candles when data/news changes ───────────────────────────────
   useEffect(()=>{
     if(!data?.length||!candleSeries.current) return;
@@ -340,26 +358,27 @@ const App=()=>{
       priceFormat:{type:'price',precision:Math.min(dec,8),minMove}
     });
 
+    const validBar = c=>Number.isFinite(c.time)&&Number.isFinite(c.open)
+                     &&Number.isFinite(c.high)&&Number.isFinite(c.low)&&Number.isFinite(c.close);
+
     const hist = data.map(c=>({
       time:  tsToSec(c.timestamp),
       open:  +c.open, high:+c.high, low:+c.low, close:+c.close,
-    })).filter(c=>c.open&&c.high&&c.low&&c.close);
+    })).filter(validBar);
 
-    // projected candles — timestamps anchored to last real candle (no gap)
-    const TF_SECS = {'1m':60,'3m':180,'5m':300,'15m':900,'30m':1800,
-      '1h':3600,'2h':7200,'4h':14400,'6h':21600,'8h':28800,'12h':43200,
-      '1d':86400,'3d':259200,'1w':604800};
     const delta = TF_SECS[timeframe] || 3600;
-    const lastRealTime = hist[hist.length-1]?.time || 0;
-    const maxFuture = futureCount!==''&&!isNaN(parseInt(futureCount))
-      ? Math.max(0,parseInt(futureCount)) : undefined;
+    const lastRealTime = hist.length ? hist[hist.length-1].time : 0;
+    lastRealTimeRef.current = lastRealTime;
+
+    const fc = parseInt(futureCount,10);
+    const maxFuture = Number.isFinite(fc) ? Math.max(0, fc) : undefined;
     const future = (setup?.future_candles||[])
       .slice(0, maxFuture)
       .map((c,i)=>({
         time:  lastRealTime + delta * (i + 1),
         open:  +c.open, high:+c.high, low:+c.low, close:+c.close,
         color:'rgba(255,200,0,.7)', borderColor:'#FFC800', wickColor:'#FFC800',
-      })).filter(c=>c.open&&c.high&&c.low&&c.close);
+      })).filter(validBar);
 
     const merged=[...hist,...future].sort((a,b)=>a.time-b.time);
     candleSeries.current.setData(merged);
@@ -370,13 +389,14 @@ const App=()=>{
       time:  tsToSec(c.timestamp),
       value: +c.volume||0,
       color: +c.close>=+c.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)',
-    })).filter(c=>c.value>0);
+    })).filter(c=>Number.isFinite(c.time)&&c.value>0);
     volumeSeries.current.setData(volData);
 
-    // markers: BOS, FVG, predicted candle start, news events
+    // ── markers ─────────────────────────────────────────────────────────
     const markers=[];
     data.forEach(c=>{
       const t=tsToSec(c.timestamp);
+      if(!Number.isFinite(t)) return;
       if(c.bullish_break) markers.push({time:t,position:'belowBar',color:'#26a69a',shape:'arrowUp',  text:'BOS↑'});
       if(c.bearish_break) markers.push({time:t,position:'aboveBar',color:'#ef5350',shape:'arrowDown',text:'BOS↓'});
       if(c.bullish_fvg)   markers.push({time:t,position:'belowBar',color:'#2962ff',shape:'circle',   text:'FVG↑'});
@@ -385,80 +405,95 @@ const App=()=>{
     if(future.length>0)
       markers.push({time:future[0].time,position:'aboveBar',color:'#FFC800',shape:'arrowDown',text:'Predicted'});
 
-    // News event markers (snap to nearest available candle time)
+    // News markers — bin into the bar each headline falls within (O(n))
     const newsList = newsData?.news || [];
-    if(newsList.length>0){
-      const chartTimes = new Set(merged.map(c=>c.time));
-      newsList.forEach(n=>{
-        if(!n.timestamp) return;
+    if(newsList.length>0 && hist.length>0){
+      const firstBar = hist[0].time;
+      const chartTimes = merged.map(c=>c.time);
+      for(const n of newsList){
+        if(!n.timestamp) continue;
         const nt = Math.floor(new Date(n.timestamp).getTime()/1000);
-        // Find closest chart bar within ±2 candles
-        let closest = null, minDiff = Infinity;
-        for(const t of chartTimes){
-          const diff = Math.abs(t - nt);
-          if(diff < minDiff && diff <= delta * 2){ minDiff=diff; closest=t; }
-        }
-        if(closest!=null){
-          markers.push({
-            time:     closest,
-            position: n.sentiment==='bullish'?'belowBar':'aboveBar',
-            color:    n.sentiment==='bullish'?'#26a69a':n.sentiment==='bearish'?'#ef5350':'#787b86',
-            shape:    'square',
-            text:     n.category==='macro'?'📰M':'📰',
-          });
-        }
-      });
+        if(!Number.isFinite(nt) || nt < firstBar - delta*2) continue;
+        const idx = Math.round((nt - firstBar) / delta);
+        const t = chartTimes[Math.max(0, Math.min(chartTimes.length-1, idx))];
+        if(t == null || Math.abs(t - nt) > delta * 2) continue;
+        markers.push({
+          time:     t,
+          position: n.sentiment==='bullish'?'belowBar':'aboveBar',
+          color:    n.sentiment==='bullish'?'#26a69a':n.sentiment==='bearish'?'#ef5350':'#787b86',
+          shape:    'square',
+          text:     '📰',
+        });
+      }
     }
 
-    // Sort markers by time (required by LightweightCharts)
     markers.sort((a,b)=>a.time-b.time);
     candleSeries.current.setMarkers(markers);
 
     if(hist.length>0) setPrevClose(hist[hist.length-1].close);
-  },[data,setup,newsData,futureCount]);
+  },[data,setup,newsData,futureCount,timeframe]);
 
   // ── WebSocket real-time ─────────────────────────────────────────────────
   useEffect(()=>{
-    if(wsRef.current){ wsRef.current.close(); wsRef.current=null; }
+    if(wsRef.current){ try{ wsRef.current.close(); }catch(_){} wsRef.current=null; }
     setWsStatus('connecting');
 
     let dead = false;
+    let attempt = 0;
+    let timer = null;
     const connect = ()=>{
       if(dead) return;
       const enc = encodeURIComponent(symbol);
       const ws  = new WebSocket(`${WS}/ws/${enc}?timeframe=${timeframe}`);
       wsRef.current = ws;
 
-      ws.onopen  = ()=>setWsStatus('live');
-      ws.onclose = ()=>{ setWsStatus('reconnecting'); if(!dead) setTimeout(connect,3000); };
+      ws.onopen  = ()=>{ attempt = 0; setWsStatus('live'); };
+      ws.onclose = ()=>{
+        if(dead) return;
+        attempt += 1;
+        const delay = Math.min(1000 * 2 ** Math.min(attempt, 5), 30000);
+        setWsStatus('reconnecting');
+        timer = setTimeout(connect, delay);
+      };
       ws.onerror = ()=>{ setWsStatus('error'); };
 
       ws.onmessage=(e)=>{
         try{
           const msg=JSON.parse(e.data);
-          if(msg.type==='price_update'){
-            setLivePrice(msg.price);
-            const t=Math.floor((msg.timestamp||0)/1000);
-            if(t>0&&candleSeries.current){
-              candleSeries.current.update({time:t,open:msg.open,high:msg.high,low:msg.low,close:msg.close});
-              volumeSeries.current?.update({time:t,value:msg.volume||0,
-                color:msg.close>=msg.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)'});
-            }
+          if(msg.type!=='price_update') return;
+          setLivePrice(msg.price);
+          const t=Math.floor((msg.timestamp||0)/1000);
+          if(!Number.isFinite(t) || t<=0) return;
+          // Never overwrite predicted future bars: clamp to last real bar.
+          const lastReal = lastRealTimeRef.current;
+          const tEff = lastReal && t > lastReal ? lastReal : t;
+          if(candleSeries.current){
+            candleSeries.current.update({
+              time:tEff, open:msg.open, high:msg.high, low:msg.low, close:msg.close,
+            });
+            volumeSeries.current?.update({
+              time:tEff, value:msg.volume||0,
+              color:msg.close>=msg.open?'rgba(38,166,154,.4)':'rgba(239,83,80,.4)',
+            });
           }
         }catch(_){}
       };
     };
     connect();
-    return()=>{ dead=true; try{ wsRef.current?.close(); }catch(_){} };
+    return()=>{
+      dead = true;
+      if(timer) clearTimeout(timer);
+      try{ wsRef.current?.close(); }catch(_){}
+    };
   },[symbol,timeframe]);
 
   // ── fetch REST data ─────────────────────────────────────────────────────
-  const fetchAll = useCallback(async(sym,tf,quiet=false)=>{
+  const fetchAll = useCallback(async(sym,tf,{quiet=false,signal}={})=>{
     if(!quiet) setLoading(true);
     try{
       const [dRes,sRes]=await Promise.all([
-        fetch(`${API}/api/market/data?symbol=${encodeURIComponent(sym)}&timeframe=${tf}&limit=1000`),
-        fetch(`${API}/api/analysis/trade-setup?symbol=${encodeURIComponent(sym)}&timeframe=${tf}`),
+        fetch(`${API}/api/market/data?symbol=${encodeURIComponent(sym)}&timeframe=${tf}&limit=1000`,{signal}),
+        fetch(`${API}/api/analysis/trade-setup?symbol=${encodeURIComponent(sym)}&timeframe=${tf}`,{signal}),
       ]);
       if(!dRes.ok) throw new Error((await dRes.json().catch(()=>({}))).detail||`HTTP ${dRes.status}`);
       if(!sRes.ok) throw new Error((await sRes.json().catch(()=>({}))).detail||`HTTP ${sRes.status}`);
@@ -466,44 +501,50 @@ const App=()=>{
       setData(dj.data);
       setSetup(sj.setup);
       setError(null);
-      // Fetch news separately (non-blocking — don't fail on news error)
-      fetch(`${API}/api/news?symbol=${encodeURIComponent(sym)}`)
-        .then(r=>r.ok?r.json():null)
-        .then(j=>{ if(j) setNewsData(j); })
-        .catch(()=>{});
     }catch(err){
+      if(err.name==='AbortError') return;
       setError(err.message);
     }finally{
       if(!quiet) setLoading(false);
     }
   },[]);
 
-  // ── symbols meta for search ─────────────────────────────────────────────
-  useEffect(()=>{
-    fetch(`${API}/api/market/symbols`)
-      .then(r=>r.json())
-      .then(j=>setAllMeta(j.meta||[]))
+  const fetchNews = useCallback((sym,signal)=>{
+    return fetch(`${API}/api/news?symbol=${encodeURIComponent(sym)}`,{signal})
+      .then(r=>r.ok?r.json():null)
+      .then(j=>{ if(j) setNewsData(j); })
       .catch(()=>{});
   },[]);
 
-  // ── initial load + 30s data refresh ────────────────────────────────────
+  // ── symbols meta for search ─────────────────────────────────────────────
   useEffect(()=>{
-    fetchAll(symbol,timeframe);
-    const id=setInterval(()=>fetchAll(symbol,timeframe,true),30000);
-    return()=>clearInterval(id);
-  },[symbol,timeframe]);
+    const ctrl = new AbortController();
+    fetch(`${API}/api/market/symbols`,{signal:ctrl.signal})
+      .then(r=>r.json())
+      .then(j=>setAllMeta(j.meta||[]))
+      .catch(()=>{});
+    return ()=>ctrl.abort();
+  },[]);
 
-  // ── 60s news-only refresh (near real-time headlines) ────────────────────
+  // ── initial load + 30 s OHLCV/setup refresh ────────────────────────────
   useEffect(()=>{
-    const pollNews=()=>{
-      fetch(`${API}/api/news?symbol=${encodeURIComponent(symbol)}`)
-        .then(r=>r.ok?r.json():null)
-        .then(j=>{ if(j) setNewsData(j); })
-        .catch(()=>{});
-    };
-    const nid=setInterval(pollNews,60000);
-    return()=>clearInterval(nid);
-  },[symbol]);
+    const ctrl = new AbortController();
+    fetchAll(symbol,timeframe,{signal:ctrl.signal});
+    const id = setInterval(
+      ()=>fetchAll(symbol,timeframe,{quiet:true,signal:ctrl.signal}), 30000);
+    return ()=>{ clearInterval(id); ctrl.abort(); };
+  },[symbol,timeframe,fetchAll]);
+
+  // ── initial news + 60 s news refresh (single source) ────────────────────
+  useEffect(()=>{
+    const ctrl = new AbortController();
+    fetchNews(symbol, ctrl.signal);
+    const id = setInterval(()=>fetchNews(symbol, ctrl.signal), 60000);
+    return ()=>{ clearInterval(id); ctrl.abort(); };
+  },[symbol,fetchNews]);
+
+  // ── reset live state on symbol change to avoid stale % change ──────────
+  useEffect(()=>{ setLivePrice(null); setPrevClose(null); },[symbol]);
 
   // ── search focus ────────────────────────────────────────────────────────
   useEffect(()=>{ if(showSearch) setTimeout(()=>searchInputRef.current?.focus(),50); },[showSearch]);
@@ -520,11 +561,12 @@ const App=()=>{
     ).slice(0,100);
   },[query,searchCat,allMeta]);
 
-  const selectSym=(sym)=>{
-    setShowSearch(false);setQuery('');setSearchCat('');
-    setSymbol(sym);
-  };
-  const changeTimeframe=(tf)=>{ setTimeframe(tf); fetchAll(symbol,tf); };
+  const closeSearch = useCallback(()=>{
+    setShowSearch(false); setQuery(''); setSearchCat('');
+  },[]);
+  const selectSym = (sym)=>{ closeSearch(); setSymbol(sym); };
+  // Effect on [symbol,timeframe] handles the fetch — no manual call needed.
+  const changeTimeframe = (tf)=> setTimeframe(tf);
 
   // ── derived values ──────────────────────────────────────────────────────
   const price    = livePrice ?? setup?.current_price ?? null;
@@ -702,6 +744,18 @@ const App=()=>{
                       color:mtf.mtf_consistency==='ALIGNED'?'#26a69a':'#ff9800'}}>
                       TF Consistency: {mtf.mtf_consistency}
                     </span>
+                  </div>
+                )}
+                {/* HTF fetch warnings */}
+                {(mtf?.htf_warnings||[]).length>0&&(
+                  <div style={{marginTop:6,padding:'5px 8px',borderRadius:5,
+                               background:'#ef535011',border:'1px solid #ef535033'}}>
+                    <p style={{fontSize:10,fontWeight:600,color:'#ef5350',marginBottom:2}}>
+                      Some HTFs unavailable
+                    </p>
+                    {mtf.htf_warnings.map((w,i)=>(
+                      <p key={i} style={{fontSize:9,color:'#787b86'}}>{w}</p>
+                    ))}
                   </div>
                 )}
               </Section>
@@ -917,7 +971,7 @@ const App=()=>{
 
       {/* ── SYMBOL SEARCH MODAL ── */}
       {showSearch&&(
-        <div className="search-modal" onClick={()=>{setShowSearch(false);setSearchCat('');setQuery('');}}>
+        <div className="search-modal" onClick={closeSearch}>
           <div className="search-box" onClick={e=>e.stopPropagation()}>
             <div style={{display:'flex',alignItems:'center',padding:'0 16px',borderBottom:'1px solid #2a2e39'}}>
               <span style={{color:'#787b86',marginRight:8}}>🔍</span>
@@ -926,10 +980,10 @@ const App=()=>{
                 value={query} onChange={e=>setQuery(e.target.value)}
                 onKeyDown={e=>{
                   if(e.key==='Enter'&&filtered.length>0) selectSym(filtered[0].symbol);
-                  if(e.key==='Escape') setShowSearch(false);
+                  if(e.key==='Escape') closeSearch();
                 }}
               />
-              <button onClick={()=>{setShowSearch(false);setSearchCat('');setQuery('');}}
+              <button onClick={closeSearch}
                 style={{background:'none',border:'none',color:'#787b86',cursor:'pointer',fontSize:16}}>✕</button>
             </div>
 
@@ -975,13 +1029,30 @@ const App=()=>{
         </div>
       )}
 
-      {/* spin keyframe */}
-      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 };
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+class ErrorBoundary extends React.Component {
+  constructor(p){ super(p); this.state={err:null}; }
+  static getDerivedStateFromError(err){ return {err}; }
+  componentDidCatch(err,info){ console.error('App error:',err,info); }
+  render(){
+    if(this.state.err){
+      return (
+        <div style={{padding:24,color:'#ef5350',fontFamily:'monospace',fontSize:12}}>
+          <p style={{fontWeight:700,marginBottom:8}}>Something went wrong.</p>
+          <p style={{color:'#787b86',whiteSpace:'pre-wrap'}}>{String(this.state.err)}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <ErrorBoundary><App/></ErrorBoundary>
+);
 </script>
 </body>
 </html>
