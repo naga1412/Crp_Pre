@@ -1,32 +1,57 @@
-from fastapi import FastAPI, Query, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-import requests
-import pandas as pd
-import numpy as np
 import asyncio
 import json
+import logging
+import os
+import re
 import time
 import xml.etree.ElementTree as ET
-from typing import Optional
-from datetime import datetime, timezone, timedelta
+from collections import OrderedDict
+from datetime import datetime, timezone
 
+import numpy as np
+import pandas as pd
+import requests
 import websockets as ws_lib
 import yfinance as yf
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from ta_logic import (
-    process_ohlcv_data, process_yfinance_data,
-    generate_trade_setup, analyze_single_timeframe, generate_mtf_prediction,
+    analyze_single_timeframe,
+    generate_mtf_prediction,
+    generate_trade_setup,
+    process_ohlcv_data,
+    process_yfinance_data,
 )
+
+logger = logging.getLogger("smcpro")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
 app = FastAPI(title="SMC Pro — Crypto & Stock TA API")
 
+# CORS — origins are env-driven. Default: localhost dev only.
+# Set CORS_ORIGINS to a comma-separated list to allow others.
+_cors_env = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+ALLOWED_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET"],
     allow_headers=["*"],
 )
+
+# Symbol input whitelist — applied to every user-supplied symbol before it
+# touches Binance/yFinance URLs.
+SYMBOL_RE = re.compile(r"^[A-Za-z0-9.\-^=/]{1,20}$")
+
+
+def validate_symbol(symbol: str) -> str:
+    if (not symbol or not SYMBOL_RE.match(symbol)
+            or ".." in symbol or "//" in symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+    return symbol
 
 # ─────────────────────────────────────────────
 #  CONSTANTS
@@ -198,7 +223,7 @@ POPULAR_CRYPTO = [
     {"symbol":"AVAX/USDT",  "name":"Avalanche",        "exchange":"Binance","type":"crypto"},
     {"symbol":"DOT/USDT",   "name":"Polkadot",         "exchange":"Binance","type":"crypto"},
     {"symbol":"LINK/USDT",  "name":"Chainlink",        "exchange":"Binance","type":"crypto"},
-    {"symbol":"MATIC/USDT", "name":"Polygon (MATIC)",  "exchange":"Binance","type":"crypto"},
+    {"symbol":"POL/USDT",   "name":"Polygon (POL)",    "exchange":"Binance","type":"crypto"},
     {"symbol":"UNI/USDT",   "name":"Uniswap",          "exchange":"Binance","type":"crypto"},
     {"symbol":"LTC/USDT",   "name":"Litecoin",         "exchange":"Binance","type":"crypto"},
     {"symbol":"BCH/USDT",   "name":"Bitcoin Cash",     "exchange":"Binance","type":"crypto"},
@@ -223,7 +248,6 @@ POPULAR_CRYPTO = [
     {"symbol":"SEI/USDT",   "name":"Sei Network",      "exchange":"Binance","type":"crypto"},
     {"symbol":"RENDER/USDT","name":"Render Network",   "exchange":"Binance","type":"crypto"},
     {"symbol":"FET/USDT",   "name":"Fetch.ai",         "exchange":"Binance","type":"crypto"},
-    {"symbol":"RNDR/USDT",  "name":"Render Token",     "exchange":"Binance","type":"crypto"},
     {"symbol":"GRT/USDT",   "name":"The Graph",        "exchange":"Binance","type":"crypto"},
     {"symbol":"SAND/USDT",  "name":"The Sandbox",      "exchange":"Binance","type":"crypto"},
     {"symbol":"MANA/USDT",  "name":"Decentraland",     "exchange":"Binance","type":"crypto"},
@@ -245,17 +269,65 @@ POPULAR_CRYPTO = [
     {"symbol":"SOL/BTC",    "name":"Solana / BTC",     "exchange":"Binance","type":"crypto"},
 ]
 
-# Cached crypto symbols from Binance
+# ─────────────────────────────────────────────
+#  CACHES
+# ─────────────────────────────────────────────
+
+# Binance symbol list — refreshed once per CRYPTO_LIST_TTL.
 _cached_crypto: list = []
+_cached_crypto_ts: float = 0.0
+CRYPTO_LIST_TTL = 3600  # 1 hour
 
-# ─────────────────────────────────────────────
-#  NEWS CACHE & SCORING
-# ─────────────────────────────────────────────
+NEWS_CACHE_TTL        = 60     # 1 min per-symbol news cache
+GLOBAL_NEWS_CACHE_TTL = 60     # 1 min global news cache
+NEWS_CACHE_MAX_KEYS   = 200    # bound on per-symbol cache size
 
-_news_cache: dict = {}        # key → (timestamp_float, response_dict)
-_global_news_cache: tuple = (0.0, [])   # (ts, items) — world market news
-NEWS_CACHE_TTL        = 60    # 1 min per-symbol cache (near real-time)
-GLOBAL_NEWS_CACHE_TTL = 60    # 1 min global news cache (near real-time)
+_global_news_cache: tuple = (0.0, [])    # (ts, items)
+_news_cache: "OrderedDict[str, tuple]" = OrderedDict()  # key → (ts, response)
+
+
+def _news_cache_get(key: str):
+    item = _news_cache.get(key)
+    if item is None:
+        return None
+    ts, data = item
+    if time.time() - ts >= NEWS_CACHE_TTL:
+        _news_cache.pop(key, None)
+        return None
+    _news_cache.move_to_end(key)
+    return data
+
+
+def _news_cache_set(key: str, data) -> None:
+    _news_cache[key] = (time.time(), data)
+    _news_cache.move_to_end(key)
+    while len(_news_cache) > NEWS_CACHE_MAX_KEYS:
+        _news_cache.popitem(last=False)
+
+
+# Bounded cache for per-(symbol, tf) OHLCV — short TTL, tiny entries.
+OHLCV_CACHE_TTL = 5
+OHLCV_CACHE_MAX = 256
+_ohlcv_cache: "OrderedDict[str, tuple]" = OrderedDict()
+
+
+def _ohlcv_cache_get(key: str):
+    item = _ohlcv_cache.get(key)
+    if item is None:
+        return None
+    ts, df = item
+    if time.time() - ts >= OHLCV_CACHE_TTL:
+        _ohlcv_cache.pop(key, None)
+        return None
+    _ohlcv_cache.move_to_end(key)
+    return df
+
+
+def _ohlcv_cache_set(key: str, df) -> None:
+    _ohlcv_cache[key] = (time.time(), df)
+    _ohlcv_cache.move_to_end(key)
+    while len(_ohlcv_cache) > OHLCV_CACHE_MAX:
+        _ohlcv_cache.popitem(last=False)
 
 # ── Keyword taxonomy ──────────────────────────────────────────────────────────
 _KW_BULLISH = [
@@ -465,11 +537,12 @@ def is_crypto(symbol: str) -> bool:
 # ─────────────────────────────────────────────
 
 def fetch_binance_symbols() -> list:
-    global _cached_crypto
-    if _cached_crypto:
+    global _cached_crypto, _cached_crypto_ts
+    if _cached_crypto and time.time() - _cached_crypto_ts < CRYPTO_LIST_TTL:
         return _cached_crypto
-    resp = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=15)
-    if resp.status_code == 200:
+    try:
+        resp = requests.get("https://api.binance.com/api/v3/exchangeInfo", timeout=15)
+        resp.raise_for_status()
         data = resp.json()
         syms = [
             s['symbol'].replace('USDT', '/USDT')
@@ -477,8 +550,11 @@ def fetch_binance_symbols() -> list:
             if s['symbol'].endswith('USDT') and s['status'] == 'TRADING'
         ]
         _cached_crypto = syms
+        _cached_crypto_ts = time.time()
         return syms
-    return [c['symbol'] for c in POPULAR_CRYPTO]
+    except Exception as exc:
+        logger.warning("Binance exchangeInfo fetch failed: %s", exc)
+        return _cached_crypto or [c['symbol'] for c in POPULAR_CRYPTO]
 
 
 def fetch_binance_ohlcv(symbol: str, timeframe: str, limit: int) -> list:
@@ -486,7 +562,10 @@ def fetch_binance_ohlcv(symbol: str, timeframe: str, limit: int) -> list:
     url  = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval={timeframe}&limit={limit}"
     resp = requests.get(url, timeout=15)
     if resp.status_code != 200:
-        raise Exception(f"Binance API error: {resp.text[:200]}")
+        # Log full body server-side; surface a generic message.
+        logger.warning("Binance klines %s %s -> %s: %s",
+                       sym, timeframe, resp.status_code, resp.text[:200])
+        raise HTTPException(status_code=502, detail="Upstream market data unavailable")
     return [[r[0], float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5])]
             for r in resp.json()]
 
@@ -495,53 +574,66 @@ def fetch_binance_ohlcv(symbol: str, timeframe: str, limit: int) -> list:
 #  YFINANCE HELPERS
 # ─────────────────────────────────────────────
 
+_RESAMPLE_RULES = {'2h', '4h', '6h'}
+
+
 def fetch_stock_ohlcv(symbol: str, timeframe: str, limit: int):
     interval, period = YF_TF_MAP.get(timeframe, ('1d', '5y'))
     ticker = yf.Ticker(symbol)
     hist   = ticker.history(period=period, interval=interval, auto_adjust=True)
     if hist.empty:
-        raise Exception(f"No data for '{symbol}'. Check the ticker symbol.")
+        raise HTTPException(status_code=404, detail=f"No data for '{symbol}'")
 
-    # Resample for multi-hour timeframes
-    if timeframe == '4h':
-        hist = hist.resample('4h').agg({
+    if timeframe in _RESAMPLE_RULES:
+        hist = hist.resample(timeframe).agg({
             'Open': 'first', 'High': 'max', 'Low': 'min',
-            'Close': 'last', 'Volume': 'sum'
-        }).dropna()
-    elif timeframe == '2h':
-        hist = hist.resample('2h').agg({
-            'Open': 'first', 'High': 'max', 'Low': 'min',
-            'Close': 'last', 'Volume': 'sum'
-        }).dropna()
-    elif timeframe == '6h':
-        hist = hist.resample('6h').agg({
-            'Open': 'first', 'High': 'max', 'Low': 'min',
-            'Close': 'last', 'Volume': 'sum'
+            'Close': 'last', 'Volume': 'sum',
         }).dropna()
 
     return hist.iloc[-limit:]
+
+
+def load_df(symbol: str, timeframe: str, limit: int) -> pd.DataFrame:
+    """Fetch + enrich OHLCV for one (symbol, tf, limit) with a short TTL cache."""
+    key = f"{symbol}|{timeframe}|{limit}"
+    cached = _ohlcv_cache_get(key)
+    if cached is not None:
+        return cached
+
+    if is_crypto(symbol):
+        ohlcv = fetch_binance_ohlcv(symbol, timeframe, limit)
+        df = process_ohlcv_data(ohlcv)
+    else:
+        hist = fetch_stock_ohlcv(symbol, timeframe, limit)
+        df = process_yfinance_data(hist)
+
+    _ohlcv_cache_set(key, df)
+    return df
 
 
 # ─────────────────────────────────────────────
 #  SHARED MTF ANALYSIS
 # ─────────────────────────────────────────────
 
-def run_mtf_analysis(symbol: str, primary_tf: str, primary_df: pd.DataFrame):
+async def run_mtf_analysis(symbol: str, primary_tf: str, primary_df: pd.DataFrame):
     htf_tfs  = HTF_MAP.get(primary_tf, ['4h', '1d', '1w'])
-    analyses  = [analyze_single_timeframe(primary_df.copy(), primary_tf)]
-    warnings  = []
+    analyses = [analyze_single_timeframe(primary_df.copy(), primary_tf)]
+    warnings = []
 
-    for htf in htf_tfs:
+    async def _load(tf: str):
         try:
-            if is_crypto(symbol):
-                ohlcv  = fetch_binance_ohlcv(symbol, htf, 200)
-                htf_df = process_ohlcv_data(ohlcv)
-            else:
-                hist   = fetch_stock_ohlcv(symbol, htf, 200)
-                htf_df = process_yfinance_data(hist)
-            analyses.append(analyze_single_timeframe(htf_df.copy(), htf))
-        except Exception as e:
-            warnings.append(f"{htf}: {str(e)[:60]}")
+            df = await asyncio.to_thread(load_df, symbol, tf, 200)
+            return tf, analyze_single_timeframe(df.copy(), tf), None
+        except Exception as exc:
+            return tf, None, str(exc)[:120]
+
+    if htf_tfs:
+        results = await asyncio.gather(*[_load(tf) for tf in htf_tfs])
+        for tf, result, err in results:
+            if result is not None:
+                analyses.append(result)
+            elif err:
+                warnings.append(f"{tf}: {err}")
 
     mtf = generate_mtf_prediction(analyses, primary_tf)
     if warnings:
@@ -578,112 +670,132 @@ def get_symbols():
         return {"symbols": [c['symbol'] for c in POPULAR_CRYPTO], "meta": all_meta}
 
 
+# Columns kept in /api/market/data response. All other enrichment columns are
+# server-side only — sending them was wasted bandwidth.
+_MARKET_DATA_COLS = (
+    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+    'bullish_break', 'bearish_break', 'bullish_fvg', 'bearish_fvg',
+)
+
+
 @app.get("/api/market/data")
 def get_market_data(
     symbol: str = "BTC/USDT",
     timeframe: str = "1h",
     limit: int = Query(default=500, ge=10, le=1000),
 ):
+    validate_symbol(symbol)
     if timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(status_code=400, detail=f"Invalid timeframe '{timeframe}'")
     try:
-        if is_crypto(symbol):
-            ohlcv = fetch_binance_ohlcv(symbol, timeframe, limit)
-            df    = process_ohlcv_data(ohlcv)
-        else:
-            hist  = fetch_stock_ohlcv(symbol, timeframe, limit)
-            df    = process_yfinance_data(hist)
-
-        df_out  = df.replace({np.nan: None})
+        df = load_df(symbol, timeframe, limit)
+        cols = [c for c in _MARKET_DATA_COLS if c in df.columns]
+        df_out = df[cols].replace({np.nan: None})
         records = df_out.to_dict(orient='records')
-        # Emit timestamps as UTC ISO strings
         for r in records:
-            if r.get('timestamp') is not None:
-                ts = r['timestamp']
-                r['timestamp'] = (ts.isoformat()+'Z') if hasattr(ts, 'isoformat') else str(ts)+'Z'
+            ts = r.get('timestamp')
+            if ts is not None:
+                r['timestamp'] = (ts.isoformat() + 'Z') if hasattr(ts, 'isoformat') else f"{ts}Z"
         return {"symbol": symbol, "timeframe": timeframe, "data": records}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("market/data failed for %s %s", symbol, timeframe)
+        raise HTTPException(status_code=500, detail="Failed to load market data")
 
 
 @app.get("/api/analysis/trade-setup")
-def get_trade_setup(
+async def get_trade_setup(
     symbol: str = "BTC/USDT",
     timeframe: str = "1h",
     limit: int = Query(default=200, ge=10, le=1000),
 ):
+    validate_symbol(symbol)
     if timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(status_code=400, detail=f"Invalid timeframe '{timeframe}'")
     try:
-        if is_crypto(symbol):
-            ohlcv = fetch_binance_ohlcv(symbol, timeframe, limit)
-            df    = process_ohlcv_data(ohlcv)
-        else:
-            hist  = fetch_stock_ohlcv(symbol, timeframe, limit)
-            df    = process_yfinance_data(hist)
-
+        df = await asyncio.to_thread(load_df, symbol, timeframe, limit)
         current_price = float(df.iloc[-1]['close'])
-        mtf           = run_mtf_analysis(symbol, timeframe, df)
-        setup         = generate_trade_setup(df, current_price,
-                                             mtf_prediction=mtf,
-                                             tf_label=timeframe)
+        mtf = await run_mtf_analysis(symbol, timeframe, df)
+        setup = generate_trade_setup(df, current_price,
+                                     mtf_prediction=mtf,
+                                     tf_label=timeframe)
         setup['mtf_prediction'] = mtf
-
         return {"symbol": symbol, "current_price": current_price, "setup": setup}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("trade-setup failed for %s %s", symbol, timeframe)
+        raise HTTPException(status_code=500, detail="Failed to generate trade setup")
+
+
+_WORD_BOUNDARY_CACHE: dict = {}
+
+
+def _word_re(term: str) -> re.Pattern:
+    pat = _WORD_BOUNDARY_CACHE.get(term)
+    if pat is None:
+        pat = re.compile(rf"\b{re.escape(term)}\b", re.IGNORECASE)
+        _WORD_BOUNDARY_CACHE[term] = pat
+    return pat
+
+
+def _build_symbol_terms(symbol: str) -> list:
+    """Terms used to boost symbol-specific news. Word-boundary regex matched.
+    Short tickers (<3 chars) are dropped — `V`, `C`, `MS` matched everything."""
+    terms = []
+    if is_crypto(symbol):
+        coin = symbol.split('/')[0]
+        for t in (coin, COIN_NAMES.get(coin.lower(), '')):
+            if t and len(t) >= 3:
+                terms.append(t)
+    else:
+        base = symbol.split('=')[0].lstrip('^').split('.')[0]
+        if len(base) >= 3:
+            terms.append(base)
+    # Dedupe (case-insensitive) while preserving order
+    seen, out = set(), []
+    for t in terms:
+        k = t.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
 
 
 @app.get("/api/news")
 def get_news(symbol: str = "BTC/USDT"):
-    """
-    Fetch world market news from 10+ free RSS sources (CNBC, Yahoo Finance,
-    MarketWatch, CoinDesk, Google News) grouped by category.
-    Symbol-specific headlines boosted to top.
-    Cached 5 min per-symbol, 10 min global.
-    """
-    cache_key = symbol.lower().replace('/', '_').replace('=', '_').replace('^', '')
-    now = time.time()
-    if cache_key in _news_cache:
-        cached_ts, cached_data = _news_cache[cache_key]
-        if now - cached_ts < NEWS_CACHE_TTL:
-            return cached_data
+    """Aggregated market news from RSS feeds, grouped/scored by category.
+    Cached for ~60 s per-symbol and ~60 s globally."""
+    validate_symbol(symbol)
 
-    # Fetch all global news (parallel, cached separately)
+    cache_key = re.sub(r"[^a-z0-9]+", "_", symbol.lower())
+    cached = _news_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     all_news = _fetch_global_news()
 
-    # ── Symbol-specific news boost ────────────────────────────────────
-    # Build search terms for the current symbol
-    if is_crypto(symbol):
-        coin      = symbol.split('/')[0].lower()
-        sym_terms = {coin, COIN_NAMES.get(coin, coin), coin.upper()}
+    sym_terms = _build_symbol_terms(symbol)
+    if sym_terms:
+        patterns = [_word_re(t) for t in sym_terms]
+        def _is_symbol_related(h: str) -> bool:
+            return any(p.search(h) for p in patterns)
+        symbol_news = [n for n in all_news if _is_symbol_related(n['headline'])]
+        other_news  = [n for n in all_news if n not in symbol_news]
     else:
-        sym_terms = {symbol.upper(), symbol.split('=')[0].split('^')[-1].upper()}
+        symbol_news, other_news = [], list(all_news)
 
-    def _is_symbol_related(headline: str) -> bool:
-        h = headline.lower()
-        return any(t.lower() in h for t in sym_terms if len(t) > 1)
-
-    symbol_news = [n for n in all_news if _is_symbol_related(n['headline'])]
-    other_news  = [n for n in all_news if not _is_symbol_related(n['headline'])]
-
-    # Tag symbol-specific items
-    for n in symbol_news:
-        n = dict(n)  # copy
-
-    # Merge: symbol first, then rest (already sorted by timestamp desc)
     combined = symbol_news + other_news
 
-    # ── Build category summary ────────────────────────────────────────
-    cat_summary = {}
+    cat_summary: dict = {}
     for item in combined:
         cat = item['category']
-        if cat not in cat_summary:
-            cat_summary[cat] = {'bullish': 0, 'bearish': 0, 'neutral': 0, 'count': 0}
-        cat_summary[cat][item['sentiment']] += 1
-        cat_summary[cat]['count'] += 1
+        bucket = cat_summary.setdefault(
+            cat, {'bullish': 0, 'bearish': 0, 'neutral': 0, 'count': 0})
+        bucket[item['sentiment']] += 1
+        bucket['count'] += 1
 
-    # Overall market sentiment
     total_bull = sum(1 for n in combined if n['sentiment'] == 'bullish')
     total_bear = sum(1 for n in combined if n['sentiment'] == 'bearish')
     high_impact = [n for n in combined if n.get('impact_label') == 'HIGH']
@@ -703,7 +815,7 @@ def get_news(symbol: str = "BTC/USDT"):
                        "Risk-OFF" if total_bear > total_bull else "Neutral",
         },
     }
-    _news_cache[cache_key] = (now, response)
+    _news_cache_set(cache_key, response)
     return response
 
 
@@ -711,35 +823,44 @@ def get_news(symbol: str = "BTC/USDT"):
 #  WEBSOCKET — REAL-TIME PRICE STREAM
 # ─────────────────────────────────────────────
 
+STOCK_POLL_INTERVAL = int(os.getenv("STOCK_POLL_INTERVAL", "15"))   # seconds
+STOCK_POLL_MAX_BACKOFF = 120
+
+
 @app.websocket("/ws/{symbol:path}")
 async def websocket_stream(websocket: WebSocket, symbol: str, timeframe: str = "1h"):
+    if not SYMBOL_RE.match(symbol) or timeframe not in VALID_TIMEFRAMES:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     try:
         if is_crypto(symbol):
             await _stream_crypto(websocket, symbol, timeframe)
         else:
-            await _stream_stock(websocket, symbol, timeframe)
+            await _stream_stock(websocket, symbol)
     except WebSocketDisconnect:
         pass
-    except Exception as e:
+    except Exception:
+        logger.exception("websocket_stream error for %s %s", symbol, timeframe)
         try:
-            await websocket.send_json({"type": "error", "message": str(e)})
+            await websocket.send_json({"type": "error", "message": "stream failed"})
+            await websocket.close()
         except Exception:
             pass
 
 
 async def _stream_crypto(websocket: WebSocket, symbol: str, timeframe: str):
-    """Proxy Binance kline WebSocket stream to client."""
-    sym      = symbol.replace('/', '').lower()
-    interval = timeframe if timeframe in VALID_TIMEFRAMES else '1h'
-    url      = f"wss://stream.binance.com:9443/ws/{sym}@kline_{interval}"
+    """Proxy Binance kline WebSocket stream to the client."""
+    sym = symbol.replace('/', '').lower()
+    url = f"wss://stream.binance.com:9443/ws/{sym}@kline_{timeframe}"
 
-    async with ws_lib.connect(url) as binance_ws:
+    async with ws_lib.connect(url, ping_interval=20, ping_timeout=20) as upstream:
         while True:
             try:
-                raw = await asyncio.wait_for(binance_ws.recv(), timeout=30)
+                raw = await asyncio.wait_for(upstream.recv(), timeout=60)
             except asyncio.TimeoutError:
-                await websocket.send_json({"type": "ping"})
+                # Underlying ws_lib already pings; treat as a stream stall.
+                logger.info("Binance WS idle 60s for %s", symbol)
                 continue
 
             msg   = json.loads(raw)
@@ -753,20 +874,22 @@ async def _stream_crypto(websocket: WebSocket, symbol: str, timeframe: str):
                 "low":       float(kline.get('l', 0)),
                 "close":     float(kline.get('c', 0)),
                 "volume":    float(kline.get('v', 0)),
-                "timestamp": int(kline.get('t', 0)),   # ms UTC
+                "timestamp": int(kline.get('t', 0)),
                 "is_closed": bool(kline.get('x', False)),
             })
 
 
-async def _stream_stock(websocket: WebSocket, symbol: str, timeframe: str):
-    """Poll yfinance every 5 s and push latest price (delayed ~15 min for free tier)."""
+async def _stream_stock(websocket: WebSocket, symbol: str):
+    """Poll yfinance and push latest price. Backs off on errors to avoid
+    hammering Yahoo's rate limiter."""
+    backoff = STOCK_POLL_INTERVAL
     while True:
         try:
             ticker = yf.Ticker(symbol)
-            hist   = ticker.history(period="1d", interval="1m")
+            hist   = await asyncio.to_thread(
+                ticker.history, period="1d", interval="1m")
             if not hist.empty:
                 latest = hist.iloc[-1]
-                # Ensure UTC ms timestamp
                 if hasattr(latest.name, 'timestamp'):
                     ts_ms = int(latest.name.timestamp() * 1000)
                 else:
@@ -784,6 +907,8 @@ async def _stream_stock(websocket: WebSocket, symbol: str, timeframe: str):
                     "is_closed": False,
                     "delayed":   True,
                 })
-        except Exception as e:
-            await websocket.send_json({"type": "error", "message": str(e)})
-        await asyncio.sleep(5)
+            backoff = STOCK_POLL_INTERVAL
+        except Exception:
+            logger.warning("stock stream error for %s, backing off %ss", symbol, backoff)
+            backoff = min(backoff * 2, STOCK_POLL_MAX_BACKOFF)
+        await asyncio.sleep(backoff)

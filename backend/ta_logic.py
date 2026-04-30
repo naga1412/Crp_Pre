@@ -246,11 +246,12 @@ def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
 
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """ATR using Wilder's RMA (matches TA-Lib / TradingView)."""
     hl = df['high'] - df['low']
     hc = (df['high'] - df['close'].shift()).abs()
     lc = (df['low']  - df['close'].shift()).abs()
     tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+    return tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
 
 
 # ─────────────────────────────────────────────
@@ -258,22 +259,31 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 # ─────────────────────────────────────────────
 
 def detect_candle_type(o: float, h: float, l: float, c: float) -> str:
-    body       = abs(c - o)
+    """Classify a single candle by body/wick proportions.
+
+    Note: without trend context, "Hammer" vs "Hanging Man" and "Inverted
+    Hammer" vs "Shooting Star" cannot be disambiguated; we pick the
+    common-case label based on body color.
+    """
     full_range = h - l
     if full_range == 0:
         return "Doji"
-    body_ratio  = body / full_range
-    upper_wick  = h - max(o, c)
-    lower_wick  = min(o, c) - l
-    bullish     = c > o
+    body = abs(c - o)
+    body_ratio = body / full_range
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - l
+    bullish = c > o
+
     if body_ratio < 0.1:
         return "Doji"
     if body_ratio > 0.8:
         return "Marubozu (Bullish)" if bullish else "Marubozu (Bearish)"
-    if lower_wick > body * 2 and upper_wick < body * 0.5:
-        return "Hammer" if bullish else "Inverted Hammer"
-    if upper_wick > body * 2 and lower_wick < body * 0.5:
-        return "Shooting Star" if not bullish else "Inverted Hammer"
+    # Long lower wick, small upper wick → Hammer (bullish ctx) / Hanging Man (bearish ctx)
+    if body > 0 and lower_wick > body * 2 and upper_wick < body * 0.5:
+        return "Hammer" if bullish else "Hanging Man"
+    # Long upper wick, small lower wick → Inverted Hammer (bull) / Shooting Star (bear)
+    if body > 0 and upper_wick > body * 2 and lower_wick < body * 0.5:
+        return "Inverted Hammer" if bullish else "Shooting Star"
     if body_ratio < 0.3:
         return "Spinning Top"
     return "Bullish Candle" if bullish else "Bearish Candle"
@@ -527,15 +537,24 @@ def generate_mtf_prediction(analyses: list, primary_tf: str) -> dict:
 #  LIQUIDATION ZONES
 # ─────────────────────────────────────────────
 
-def approximate_liquidation_zones(current_price: float, atr: float) -> list:
+def approximate_liquidation_zones(current_price: float, atr: float,
+                                  maintenance_margin: float = 0.005) -> list:
+    """Approximate isolated-margin liquidation prices.
+
+    Formula accounts for an initial margin = 1/leverage and a typical
+    maintenance margin (~0.5% on most majors). Real exchange tiers vary —
+    treat these as indicative levels, not exact thresholds.
+    """
     d = smart_decimals(current_price)
     zones = []
     for lev in [100, 50, 25, 10]:
-        mp = 1.0 / lev
+        # Long liq when equity loss = (initial_margin - maintenance) of position.
+        loss_pct = (1.0 / lev) - maintenance_margin
+        loss_pct = max(loss_pct, 0.0)
         zones.append({
             "leverage": lev,
-            "short_liquidation": fmt(current_price * (1 + mp), d),
-            "long_liquidation":  fmt(current_price * (1 - mp), d),
+            "short_liquidation": fmt(current_price * (1 + loss_pct), d),
+            "long_liquidation":  fmt(current_price * (1 - loss_pct), d),
         })
     return zones
 
@@ -646,10 +665,9 @@ def generate_trade_setup(df: pd.DataFrame, current_price: float,
             elif bear_conf >= 2:
                 pattern = "Bear Flag Breakdown"
 
-    # Future candle projection — steps matched to real candles-per-day for this timeframe
-    steps      = TF_CANDLES_PER_DAY.get(tf_label, 12)
-    latest_time = latest['timestamp']
-    time_delta  = df['timestamp'].iloc[-1] - df['timestamp'].iloc[-2]
+    # Future candle projection — steps matched to real candles-per-day for this timeframe.
+    # Timestamps are computed client-side from the last real bar; we only emit OHLC.
+    steps = TF_CANDLES_PER_DAY.get(tf_label, 12)
 
     if mtf_prediction:
         direction  = mtf_prediction.get('next_candle_direction', 'Bullish')
@@ -661,18 +679,17 @@ def generate_trade_setup(df: pd.DataFrame, current_price: float,
 
     price_step = (tp1 - current_price) / max(steps, 1)
     curr_p     = current_price
-    curr_t     = latest_time
-    rsi_now    = float(compute_rsi(df['close']).iloc[-1]) if not pd.isna(compute_rsi(df['close']).iloc[-1]) else 50.0
+    rsi_series = compute_rsi(df['close'])
+    rsi_last   = rsi_series.iloc[-1]
+    rsi_now    = float(rsi_last) if not pd.isna(rsi_last) else 50.0
     future_candles = []
     for i in range(steps):
-        curr_t = curr_t + time_delta
-        noise  = atr * 0.15 * (-1 if i % 3 == 1 else 0.5)
-        o      = curr_p
-        c      = o + price_step * mag + noise
-        h      = max(o, c) + abs(atr * 0.2)
-        l      = min(o, c) - abs(atr * 0.2)
+        noise = atr * 0.15 * (-1 if i % 3 == 1 else 0.5)
+        o = curr_p
+        c = o + price_step * mag + noise
+        h = max(o, c) + abs(atr * 0.2)
+        l = min(o, c) - abs(atr * 0.2)
         future_candles.append({
-            "timestamp": curr_t.isoformat()+'Z',
             "open":  fmt(o, d), "high": fmt(h, d),
             "low":   fmt(l, d), "close": fmt(c, d),
             "is_future": True,
@@ -684,7 +701,6 @@ def generate_trade_setup(df: pd.DataFrame, current_price: float,
     return {
         "signal":             signal,
         "entry_zone":         entry_zone,
-        "take_profit":        tp1,       # backward-compat alias
         "take_profit_1":      tp1,
         "take_profit_2":      tp2,
         "stop_loss":          sl,
@@ -708,21 +724,24 @@ def generate_trade_setup(df: pd.DataFrame, current_price: float,
 #  DATA PROCESSORS
 # ─────────────────────────────────────────────
 
-def process_ohlcv_data(ohlcv: list) -> pd.DataFrame:
-    """Converts raw Binance OHLCV list → enriched DataFrame."""
-    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+def _enrich(df: pd.DataFrame) -> pd.DataFrame:
     df = identify_market_structure(df)
     df = detect_fvgs(df)
     df = detect_order_blocks(df)
     return df
 
 
+def process_ohlcv_data(ohlcv: list) -> pd.DataFrame:
+    """Converts the [ts, o, h, l, c, v] tuples from Binance → enriched DataFrame."""
+    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    return _enrich(df)
+
+
 def process_yfinance_data(hist) -> pd.DataFrame:
-    """Converts yfinance history DataFrame → enriched DataFrame (same schema)."""
+    """Converts a yfinance history DataFrame → enriched DataFrame (same schema)."""
     index = hist.index
-    # Convert timezone-aware index to UTC-naive
-    if hasattr(index, 'tz') and index.tz is not None:
+    if getattr(index, 'tz', None) is not None:
         index = index.tz_convert('UTC').tz_localize(None)
     df = pd.DataFrame({
         'timestamp': index,
@@ -733,7 +752,4 @@ def process_yfinance_data(hist) -> pd.DataFrame:
         'volume':    hist['Volume'].values.astype(float),
     })
     df = df.dropna(subset=['open', 'high', 'low', 'close']).reset_index(drop=True)
-    df = identify_market_structure(df)
-    df = detect_fvgs(df)
-    df = detect_order_blocks(df)
-    return df
+    return _enrich(df)
